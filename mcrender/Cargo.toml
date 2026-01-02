@@ -1,0 +1,16 @@
+[package]
+name = "mcrender"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
+fastnbt = "2.6.0"
+log = "0.4.29"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+serde = { version = "1.0.228", features = ["derive"] }
+bytes = "1.11.0"
+flate2 = "1.1.5"
+byteorder = "1.5.0"
+derivative = "2.2.0"
