@@ -455,3 +455,17 @@ pub struct BlockState {
     pub name: String,
     pub properties: BTreeMap<String, String>,
 }
+
+impl BlockState {
+    pub fn new(name: String) -> BlockState {
+        BlockState {
+            name,
+            properties: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_property(mut self, key: String, value: String) -> Self {
+        self.properties.insert(key, value);
+        self
+    }
+}
