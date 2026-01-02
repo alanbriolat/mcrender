@@ -20,10 +20,10 @@ use derivative::Derivative;
 use serde::Deserialize;
 
 const SECTOR_SIZE: usize = 4096;
-const REGION_SIZE: usize = 32;
+pub const REGION_SIZE: usize = 32;
 const REGION_HEADER_SIZE: usize = 2 * SECTOR_SIZE;
 const REGION_CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
-const CHUNK_SIZE: usize = 16;
+pub const CHUNK_SIZE: usize = 16;
 const SECTION_BLOCK_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
 const COMPRESSION_METHOD_ZLIB: u8 = 2;
@@ -82,10 +82,17 @@ impl CIndex {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct WCoords {
+pub struct BCoords {
     pub x: isize,
     pub z: isize,
     pub y: isize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct BIndex {
+    pub x: usize,
+    pub z: usize,
+    pub y: usize,
 }
 
 #[derive(Debug)]
@@ -334,7 +341,7 @@ impl RawChunk {
             },
             sections: Vec::with_capacity(chunk_nbt.sections.len()),
         };
-        let chunk_base_coords = WCoords {
+        let chunk_base_coords = BCoords {
             x: chunk.coords.x * CHUNK_SIZE as isize,
             z: chunk.coords.z * CHUNK_SIZE as isize,
             y: chunk_nbt.y_pos as isize * CHUNK_SIZE as isize,
@@ -365,9 +372,13 @@ impl RawChunk {
                     data.iter()
                         .flat_map(|v| {
                             let mut v = v as u64;
+                            let status = chunk_nbt.status.to_string();
                             std::iter::repeat_with(move || {
                                 let next = v & mask;
                                 v = v >> bits;
+                                if next >= palette_count {
+                                    panic!("block index {} > palette_count {} (bits={}, packing={}, mask={}, status={})", next, palette_count, bits, packing, mask, status);
+                                }
                                 next as u16
                             })
                             .take(packing)
@@ -377,7 +388,7 @@ impl RawChunk {
                 }
             };
             let section = Section {
-                base: WCoords {
+                base: BCoords {
                     y: section_nbt.y as isize * CHUNK_SIZE as isize,
                     ..chunk_base_coords
                 },
@@ -443,11 +454,45 @@ pub struct Chunk {
     pub sections: Vec<Section>,
 }
 
+impl Chunk {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = (BIndex, &BlockState)> {
+        self.sections.iter().enumerate().flat_map(|(i, section)| {
+            let y_offset = i * CHUNK_SIZE;
+            section.iter_blocks().map(move |(bindex, block_state)| {
+                (
+                    BIndex {
+                        y: bindex.y + y_offset,
+                        ..bindex
+                    },
+                    block_state,
+                )
+            })
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct Section {
-    pub base: WCoords,
+    pub base: BCoords,
     pub block_palette: Vec<BlockState>,
     pub block_indices: Vec<u16>,
+}
+
+impl Section {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = (BIndex, &BlockState)> {
+        self.block_indices
+            .iter()
+            .enumerate()
+            .map(|(i, &palette_index)| {
+                let x = i & 0xF;
+                let z = (i >> 4) & 0xF;
+                let y = (i >> 8) & 0xF;
+                (
+                    BIndex { x, z, y },
+                    &self.block_palette[palette_index as usize],
+                )
+            })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

@@ -5,15 +5,15 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use image::imageops::FilterType;
 use image::{Rgba, RgbaImage};
-use imageproc::geometric_transformations::{Interpolation, Projection, warp, warp_into};
+use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
 use crate::world::BlockState;
 
-const TILE_SIZE: u32 = 24;
+pub const TILE_SIZE: u32 = 24;
 
 pub struct AssetCache {
     path: PathBuf,
-    cache: HashMap<BlockState, Arc<Asset>>,
+    cache: HashMap<BlockState, Option<Arc<Asset>>>,
 }
 
 impl AssetCache {
@@ -30,19 +30,21 @@ impl AssetCache {
 
     pub fn get_asset(&mut self, block_state: &BlockState) -> Option<Arc<Asset>> {
         if let Some(asset) = self.cache.get(block_state) {
-            return Some(Arc::clone(asset));
+            return asset.clone();
         }
-        match self.create_simple_block_asset(&block_state.name) {
-            Ok(asset) => {
-                let asset = Arc::new(asset);
-                self.cache.insert(block_state.clone(), Arc::clone(&asset));
-                Some(asset)
-            }
+        let asset = match self.create_asset(block_state) {
+            Ok(asset) => Some(Arc::new(asset)),
             Err(err) => {
                 log::error!("failed to create asset for {:#?}: {}", block_state, err);
                 None
             }
-        }
+        };
+        self.cache.insert(block_state.clone(), asset.clone());
+        asset
+    }
+
+    fn create_asset(&self, block_state: &BlockState) -> anyhow::Result<Asset> {
+        self.create_simple_block_asset(&block_state.name)
     }
 
     fn create_simple_block_asset(&self, name: &str) -> anyhow::Result<Asset> {
@@ -92,7 +94,6 @@ fn transform_top_texture(top: &RgbaImage) -> RgbaImage {
 fn transform_side_texture(side: &RgbaImage) -> RgbaImage {
     let img = image::imageops::resize(side, 13, 13, FilterType::Lanczos3);
     let mut output = RgbaImage::new(TILE_SIZE / 2, (TILE_SIZE * 3) / 4);
-    log::debug!("output size: {:?}", output.dimensions());
     let projection = Projection::from_matrix([1., 0., 0., 0.5, 1., 0., 0., 0., 1.]).unwrap();
     warp_into(
         &img,

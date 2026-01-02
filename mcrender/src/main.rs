@@ -1,16 +1,16 @@
-use std::path::PathBuf;
-
-use crate::asset::AssetCache;
-use crate::world::{DimensionID, RCoords};
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use image::imageops::FilterType;
-use image::{Rgba, RgbaImage};
-use imageproc::drawing::Canvas;
-use imageproc::rect::Rect;
+use std::fs::File;
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::format::FmtSpan;
+
+use crate::asset::AssetCache;
+use crate::render::Renderer;
+use crate::world::{DimensionID, RCoords};
 
 mod asset;
+mod render;
 mod world;
 
 #[derive(Debug, Parser)]
@@ -26,12 +26,13 @@ struct Args {
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .with_span_events(FmtSpan::CLOSE)
         .init();
 
     let args = Args::parse();
     log::debug!("args: {:?}", args);
 
-    let mut asset_cache = AssetCache::new(args.assets)?;
+    let asset_cache = AssetCache::new(args.assets)?;
 
     let world_info = world::WorldInfo::try_from_path(args.source)?;
     log::debug!("world_info: {:?}", world_info);
@@ -40,7 +41,7 @@ fn main() -> Result<()> {
         .ok_or(anyhow!("no such dimension"))?;
     log::debug!("dim_info: {:?}", dim_info);
     let region_info = dim_info
-        .get_region(RCoords { x: 0, z: 0 })
+        .get_region(RCoords { x: 0, z: -1 })
         .ok_or(anyhow!("no such region"))?;
     log::debug!("region_info: {:?}", region_info);
     let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
@@ -48,40 +49,11 @@ fn main() -> Result<()> {
     let chunk = raw_chunk.parse()?;
     log::debug!("chunk: {:?}", chunk);
 
-    // Testing asset loading
-    let stone_block = world::BlockState::new("minecraft:stone".into());
-    let asset = asset_cache
-        .get_asset(&stone_block)
-        .ok_or(anyhow!("no such asset"))?;
+    let mut renderer = Renderer::new(asset_cache);
+    let image = renderer.render_chunk(&chunk)?;
 
-    let image = image::imageops::resize(
-        &asset.image,
-        asset.image.width() * 8,
-        asset.image.height() * 8,
-        FilterType::Nearest,
-    );
-    let mut display_image = RgbaImage::new(image.width() * 2, image.height() * 2);
-    let box_rect = Rect::at(0, 0).of_size(display_image.width(), display_image.height());
-    imageproc::drawing::draw_filled_rect_mut(&mut display_image, box_rect, Rgba([20, 30, 40, 255]));
-    image::imageops::overlay(&mut display_image, &image, image.width() as i64 / 2, 0);
-    image::imageops::overlay(
-        &mut display_image,
-        &image,
-        image.width() as i64,
-        image.height() as i64 / 4,
-    );
-    image::imageops::overlay(
-        &mut display_image,
-        &image,
-        image.width() as i64 / 2,
-        image.height() as i64 / 2,
-    );
-    imageproc::window::display_image(
-        "blah",
-        &display_image,
-        display_image.width(),
-        display_image.width(),
-    );
+    let mut output_file = File::create(args.target.join("mcrender-output.png"))?;
+    image.write_to(&mut output_file, image::ImageFormat::Png)?;
 
     Ok(())
 }
