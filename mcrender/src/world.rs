@@ -16,15 +16,18 @@ use std::{fs, io};
 use anyhow::anyhow;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::Buf;
-use derivative::Derivative;
+use derivative::Derivative; // TODO: replace with derive_more::Debug
 use serde::Deserialize;
 
+use crate::coords::{CoordsXZ, CoordsXZY, IndexXZ, IndexXZY};
+
 const SECTOR_SIZE: usize = 4096;
-pub const REGION_SIZE: usize = 32;
+pub const REGION_SIZE: u32 = 32;
 const REGION_HEADER_SIZE: usize = 2 * SECTOR_SIZE;
-const REGION_CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
-pub const CHUNK_SIZE: usize = 16;
-const SECTION_BLOCK_COUNT: usize = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+const REGION_CHUNK_COUNT: usize = (REGION_SIZE * REGION_SIZE) as usize;
+pub const CHUNK_SIZE: u32 = 16;
+const SECTION_BLOCK_COUNT: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
+pub const WORLD_HEIGHT: u32 = 384;
 
 const COMPRESSION_METHOD_ZLIB: u8 = 2;
 
@@ -37,63 +40,161 @@ pub enum DimensionID {
 }
 
 /// Global region coordinates.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct RCoords {
-    pub x: isize,
-    pub z: isize,
-}
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::Deref,
+    derive_more::DerefMut,
+    derive_more::Add,
+    derive_more::AddAssign,
+    derive_more::Sub,
+    derive_more::SubAssign,
+    derive_more::Mul,
+    derive_more::MulAssign,
+)]
+pub struct RCoords(pub CoordsXZ);
 
 /// Global chunk coordinates.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct CCoords {
-    pub x: isize,
-    pub z: isize,
-}
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::Deref,
+    derive_more::DerefMut,
+    derive_more::Add,
+    derive_more::AddAssign,
+    derive_more::Sub,
+    derive_more::SubAssign,
+    derive_more::Mul,
+    derive_more::MulAssign,
+)]
+pub struct CCoords(pub CoordsXZ);
 
 impl CCoords {
     pub fn to_region_coords(self) -> (RCoords, CIndex) {
         (
-            RCoords {
-                x: self.x.div_euclid(REGION_SIZE as isize),
-                z: self.z.div_euclid(REGION_SIZE as isize),
-            },
-            CIndex {
-                x: self.x.rem_euclid(REGION_SIZE as isize) as usize,
-                z: self.z.rem_euclid(REGION_SIZE as isize) as usize,
-            },
+            RCoords(
+                (
+                    self.x().div_euclid(REGION_SIZE as i32),
+                    self.z().div_euclid(REGION_SIZE as i32),
+                )
+                    .into(),
+            ),
+            CIndex(
+                (
+                    self.x().rem_euclid(REGION_SIZE as i32) as u32,
+                    self.z().rem_euclid(REGION_SIZE as i32) as u32,
+                )
+                    .into(),
+            ),
         )
+            .into()
     }
 }
 
 /// 2D chunk index within a region.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct CIndex {
-    pub x: usize,
-    pub z: usize,
-}
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::Deref,
+    derive_more::DerefMut,
+    derive_more::Add,
+    derive_more::AddAssign,
+    derive_more::Sub,
+    derive_more::SubAssign,
+    derive_more::Mul,
+    derive_more::MulAssign,
+)]
+pub struct CIndex(pub IndexXZ);
 
 impl CIndex {
     pub fn to_chunk_coords(self, region_coords: RCoords) -> CCoords {
-        CCoords {
-            x: region_coords.x * REGION_SIZE as isize + self.x as isize,
-            z: region_coords.z * REGION_SIZE as isize + self.z as isize,
-        }
+        CCoords(
+            (
+                region_coords.x() * REGION_SIZE as i32 + self.x() as i32,
+                region_coords.z() * REGION_SIZE as i32 + self.z() as i32,
+            )
+                .into(),
+        )
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct BCoords {
-    pub x: isize,
-    pub z: isize,
-    pub y: isize,
-}
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::Deref,
+    derive_more::DerefMut,
+    derive_more::Add,
+    derive_more::AddAssign,
+    derive_more::Sub,
+    derive_more::SubAssign,
+    derive_more::Mul,
+    derive_more::MulAssign,
+)]
+pub struct BCoords(pub CoordsXZY);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct BIndex {
-    pub x: usize,
-    pub z: usize,
-    pub y: usize,
-}
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    derive_more::From,
+    derive_more::Into,
+    derive_more::Display,
+    derive_more::Deref,
+    derive_more::DerefMut,
+    derive_more::Add,
+    derive_more::AddAssign,
+    derive_more::Sub,
+    derive_more::SubAssign,
+    derive_more::Mul,
+    derive_more::MulAssign,
+)]
+pub struct BIndex(pub IndexXZY);
 
 #[derive(Debug)]
 pub struct WorldInfo {
@@ -171,11 +272,13 @@ impl RegionInfo {
         if let Some(next) = filename.strip_suffix(".mca")
             && let Some(next) = next.strip_prefix("r.")
             && let Some((raw_x, raw_z)) = next.split_once(".")
-            && let Ok(x) = isize::from_str(raw_x)
-            && let Ok(z) = isize::from_str(raw_z)
+            && let Ok(x) = i32::from_str(raw_x)
+            && let Ok(z) = i32::from_str(raw_z)
         {
-            let coords = RCoords { x, z };
-            Ok(Self { coords, path })
+            Ok(Self {
+                coords: RCoords((x, z).into()),
+                path,
+            })
         } else {
             Err(anyhow!("not a region filename (r.X.Z.mca)"))
         }
@@ -217,7 +320,7 @@ impl<S: Read + Seek> Region<S> {
     pub fn into_iter(self) -> RegionChunkIter<S> {
         RegionChunkIter {
             region: self,
-            index_iter: 0..REGION_CHUNK_COUNT,
+            index_iter: 0..REGION_CHUNK_COUNT as u32,
         }
     }
 
@@ -225,8 +328,8 @@ impl<S: Read + Seek> Region<S> {
         &self.info
     }
 
-    fn read_chunk_data(&mut self, index: usize) -> anyhow::Result<Option<Vec<u8>>> {
-        let offset_count = self.chunks[index];
+    fn read_chunk_data(&mut self, index: u32) -> anyhow::Result<Option<Vec<u8>>> {
+        let offset_count = self.chunks[index as usize];
         // Offset of 0 means there is no chunk data for this chunk
         if offset_count == 0 {
             return Ok(None);
@@ -259,7 +362,7 @@ impl<S: Read + Seek> Region<S> {
 
 pub struct RegionChunkIter<S: Read + Seek> {
     region: Region<S>,
-    index_iter: Range<usize>,
+    index_iter: Range<u32>,
 }
 
 impl<S: Read + Seek> RegionChunkIter<S> {
@@ -275,10 +378,7 @@ impl<S: Read + Seek> Iterator for RegionChunkIter<S> {
         while let Some(index) = self.index_iter.next() {
             match self.region.read_chunk_data(index) {
                 Ok(Some(data)) => {
-                    let index = CIndex {
-                        x: index % 32,
-                        z: index / 32,
-                    };
+                    let index = CIndex((index % 32, index / 32).into());
                     let coords = index.to_chunk_coords(self.region.info.coords);
                     return Some(Ok(RawChunk {
                         index,
@@ -311,17 +411,17 @@ impl RawChunk {
         let chunk_nbt: nbt::Chunk = fastnbt::from_bytes(self.data.as_slice())?;
 
         let mut chunk = Chunk {
-            coords: CCoords {
-                x: chunk_nbt.x_pos as isize,
-                z: chunk_nbt.z_pos as isize,
-            },
+            coords: CCoords((chunk_nbt.x_pos, chunk_nbt.z_pos).into()),
             sections: Vec::with_capacity(chunk_nbt.sections.len()),
         };
-        let chunk_base_coords = BCoords {
-            x: chunk.coords.x * CHUNK_SIZE as isize,
-            z: chunk.coords.z * CHUNK_SIZE as isize,
-            y: chunk_nbt.y_pos as isize * CHUNK_SIZE as isize,
-        };
+        let chunk_base_coords = BCoords(
+            (
+                chunk.coords.x() * CHUNK_SIZE as i32,
+                chunk.coords.z() * CHUNK_SIZE as i32,
+                chunk_nbt.y_pos * CHUNK_SIZE as i32,
+            )
+                .into(),
+        );
 
         for section_nbt in chunk_nbt.sections.iter() {
             let block_palette = section_nbt
@@ -361,10 +461,14 @@ impl RawChunk {
                 }
             };
             let section = Section {
-                base: BCoords {
-                    y: section_nbt.y as isize * CHUNK_SIZE as isize,
-                    ..chunk_base_coords
-                },
+                base: BCoords(
+                    (
+                        chunk_base_coords.x(),
+                        chunk_base_coords.z(),
+                        section_nbt.y as i32 * CHUNK_SIZE as i32,
+                    )
+                        .into(),
+                ),
                 block_palette,
                 block_indices,
             };
@@ -430,13 +534,10 @@ pub struct Chunk {
 impl Chunk {
     pub fn iter_blocks(&self) -> impl Iterator<Item = (BIndex, &BlockState)> {
         self.sections.iter().enumerate().flat_map(|(i, section)| {
-            let y_offset = i * CHUNK_SIZE;
+            let y_offset = i * CHUNK_SIZE as usize;
             section.iter_blocks().map(move |(bindex, block_state)| {
                 (
-                    BIndex {
-                        y: bindex.y + y_offset,
-                        ..bindex
-                    },
+                    BIndex((bindex.x(), bindex.z(), bindex.y() + y_offset as u32).into()),
                     block_state,
                 )
             })
@@ -461,7 +562,7 @@ impl Section {
                 let z = (i >> 4) & 0xF;
                 let y = (i >> 8) & 0xF;
                 (
-                    BIndex { x, z, y },
+                    BIndex((x as u32, z as u32, y as u32).into()),
                     &self.block_palette[palette_index as usize],
                 )
             })

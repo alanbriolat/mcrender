@@ -6,10 +6,11 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::asset::AssetCache;
-use crate::render::Renderer;
+use crate::render::{DirectoryRenderCache, Renderer};
 use crate::world::{DimensionID, RCoords};
 
 mod asset;
+mod coords;
 mod render;
 mod world;
 
@@ -21,6 +22,8 @@ struct Args {
     source: PathBuf,
     #[arg(short, long)]
     target: PathBuf,
+    #[arg(short, long)]
+    cache_dir: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -41,7 +44,7 @@ fn main() -> Result<()> {
         .ok_or(anyhow!("no such dimension"))?;
     // log::debug!("dim_info: {:?}", dim_info);
     let region_info = dim_info
-        .get_region(RCoords { x: 0, z: 0 })
+        .get_region(RCoords((0, 0).into()))
         .ok_or(anyhow!("no such region"))?;
     // log::debug!("region_info: {:?}", region_info);
     let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
@@ -50,8 +53,11 @@ fn main() -> Result<()> {
     // log::debug!("chunk: {:?}", chunk);
 
     let mut renderer = Renderer::new(asset_cache);
-    // let image = renderer.render_chunk(&chunk)?;
-    let image = renderer.render_region(&region_info)?;
+    if let Some(cache_dir) = &args.cache_dir {
+        renderer.set_render_cache(DirectoryRenderCache::new(cache_dir.clone())?);
+    }
+    // let image = renderer.get_chunk(&raw_chunk)?;
+    let image = renderer.get_region(&region_info)?;
 
     let mut output_file = File::create(args.target.join("mcrender-output.png"))?;
     image.write_to(&mut output_file, image::ImageFormat::Png)?;
