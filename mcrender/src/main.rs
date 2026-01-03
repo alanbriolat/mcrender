@@ -39,18 +39,19 @@ fn main() -> Result<()> {
     let dim_info = world_info
         .get_dimension(&DimensionID::Overworld)
         .ok_or(anyhow!("no such dimension"))?;
-    log::debug!("dim_info: {:?}", dim_info);
+    // log::debug!("dim_info: {:?}", dim_info);
     let region_info = dim_info
-        .get_region(RCoords { x: 0, z: -1 })
+        .get_region(RCoords { x: 0, z: 0 })
         .ok_or(anyhow!("no such region"))?;
-    log::debug!("region_info: {:?}", region_info);
+    // log::debug!("region_info: {:?}", region_info);
     let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
-    log::debug!("raw_chunk: {:?}", raw_chunk);
+    // log::debug!("raw_chunk: {:?}", raw_chunk);
     let chunk = raw_chunk.parse()?;
-    log::debug!("chunk: {:?}", chunk);
+    // log::debug!("chunk: {:?}", chunk);
 
     let mut renderer = Renderer::new(asset_cache);
-    let image = renderer.render_chunk(&chunk)?;
+    // let image = renderer.render_chunk(&chunk)?;
+    let image = renderer.render_region(&region_info)?;
 
     let mut output_file = File::create(args.target.join("mcrender-output.png"))?;
     image.write_to(&mut output_file, image::ImageFormat::Png)?;
