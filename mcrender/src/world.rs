@@ -185,29 +185,6 @@ impl RegionInfo {
         let file = File::open(&self.path)?;
         Region::from_stream(self.clone(), file)
     }
-    // pub fn iter_chunks(&self) -> impl Iterator<Item=anyhow::Result<Chunk>> {
-    //     let file = File::open(&self.path).unwrap();
-    //     let mut region = fastanvil::Region::from_stream(file).unwrap();
-    //     let mut region_iter = region.iter();
-    //     std::iter::from_fn(move || region_iter.next()).map(|result| {
-    //         match result {
-    //             Ok(chunk) => {
-    //                 fastnbt::from_reader(chunk.data.as_slice()).context("reading NBT")
-    //             },
-    //             Err(err) => Err(anyhow!(err)),
-    //         }
-    //     })
-    //     // std::iter::from_fn()
-    //     // region.into_iter().map(|result| {
-    //     //     match result {
-    //     //         Ok(chunk) => {
-    //     //             fastnbt::from_reader(chunk.data.as_slice()).context("reading NBT")
-    //     //         },
-    //     //         Err(err) => Err(anyhow!(err)),
-    //     //     }
-    //     // })
-    //     // unimplemented!()
-    // }
 }
 
 pub struct Region<S: Read + Seek> {
@@ -332,7 +309,6 @@ pub struct RawChunk {
 impl RawChunk {
     pub fn parse(&self) -> anyhow::Result<Chunk> {
         let chunk_nbt: nbt::Chunk = fastnbt::from_bytes(self.data.as_slice())?;
-        log::debug!("chunk_nbt: {:?}", chunk_nbt);
 
         let mut chunk = Chunk {
             coords: CCoords {
@@ -366,7 +342,7 @@ impl RawChunk {
                 None => Vec::from([0u16; SECTION_BLOCK_COUNT]),
                 Some(data) => {
                     let palette_count = section_nbt.block_states.palette.len() as u64;
-                    let bits = max(4, u64::BITS - palette_count.leading_zeros()) as usize;
+                    let bits = max(4, u64::BITS - (palette_count - 1).leading_zeros()) as usize;
                     let packing = u64::BITS as usize / bits;
                     let mask = (1u64 << bits) - 1;
                     data.iter()
@@ -376,9 +352,6 @@ impl RawChunk {
                             std::iter::repeat_with(move || {
                                 let next = v & mask;
                                 v = v >> bits;
-                                if next >= palette_count {
-                                    panic!("block index {} > palette_count {} (bits={}, packing={}, mask={}, status={})", next, palette_count, bits, packing, mask, status);
-                                }
                                 next as u16
                             })
                             .take(packing)
