@@ -142,12 +142,12 @@ impl Renderer {
     fn render_chunk(&mut self, raw_chunk: &RawChunk) -> anyhow::Result<RgbaImage> {
         let chunk = raw_chunk.parse()?;
         let mut output = RgbaImage::new(CHUNK_TILE_MAP.image_size.0, CHUNK_TILE_MAP.image_size.1);
-        for (bindex, block_state) in chunk.iter_blocks() {
-            let Some(asset) = self.asset_cache.get_asset(block_state) else {
+        for block in chunk.iter_blocks() {
+            let Some(asset) = self.asset_cache.get_asset(block.state) else {
                 continue;
             };
             let (output_x, output_y) =
-                CHUNK_TILE_MAP.tile_position(bindex.into(), BLOCK_COUNT_SINGLE);
+                CHUNK_TILE_MAP.tile_position(block.index.into(), BLOCK_COUNT_SINGLE);
             image::imageops::overlay(&mut output, &asset.image, output_x, output_y);
         }
         Ok(output)

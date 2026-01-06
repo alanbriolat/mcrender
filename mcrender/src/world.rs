@@ -27,6 +27,7 @@ const REGION_HEADER_SIZE: usize = 2 * SECTOR_SIZE;
 const REGION_CHUNK_COUNT: usize = (REGION_SIZE * REGION_SIZE) as usize;
 pub const CHUNK_SIZE: u32 = 16;
 const SECTION_BLOCK_COUNT: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
+const SECTION_BIOME_COUNT: usize = SECTION_BLOCK_COUNT / (4 * 4 * 4) as usize;
 pub const WORLD_HEIGHT: u32 = 384;
 
 const COMPRESSION_METHOD_ZLIB: u8 = 2;
@@ -448,7 +449,6 @@ impl RawChunk {
                     data.iter()
                         .flat_map(|v| {
                             let mut v = v as u64;
-                            let status = chunk_nbt.status.to_string();
                             std::iter::repeat_with(move || {
                                 let next = v & mask;
                                 v = v >> bits;
@@ -457,6 +457,33 @@ impl RawChunk {
                             .take(packing)
                         })
                         .take(SECTION_BLOCK_COUNT)
+                        .collect()
+                }
+            };
+            let biome_palette = section_nbt
+                .biomes
+                .palette
+                .iter()
+                .map(|biome| biome.clone().into_owned())
+                .collect();
+            let biome_indices = match section_nbt.biomes.data.as_ref() {
+                None => Vec::from([0u8; SECTION_BIOME_COUNT]),
+                Some(data) => {
+                    let palette_count = section_nbt.biomes.palette.len() as u64;
+                    let bits = (u64::BITS - (palette_count - 1).leading_zeros()) as usize;
+                    let packing = u64::BITS as usize / bits;
+                    let mask = (1u64 << bits) - 1;
+                    data.iter()
+                        .flat_map(|v| {
+                            let mut v = v as u64;
+                            std::iter::repeat_with(move || {
+                                let next = v & mask;
+                                v = v >> bits;
+                                next as u8
+                            })
+                            .take(packing)
+                        })
+                        .take(SECTION_BIOME_COUNT)
                         .collect()
                 }
             };
@@ -471,6 +498,8 @@ impl RawChunk {
                 ),
                 block_palette,
                 block_indices,
+                biome_palette,
+                biome_indices,
             };
             chunk.sections.push(section);
         }
@@ -504,14 +533,15 @@ mod nbt {
         pub y: i8,
         #[serde(borrow)]
         pub block_states: BlockStates<'a>,
+        #[serde(borrow)]
+        pub biomes: Biomes<'a>,
     }
 
-    #[derive(Derivative, Deserialize)]
-    #[derivative(Debug)]
+    #[derive(Deserialize, derive_more::Debug)]
     pub(super) struct BlockStates<'a> {
         pub palette: Vec<BlockState<'a>>,
         #[serde(borrow)]
-        // #[derivative(Debug = "ignore")]
+        #[debug(ignore)]
         pub data: Option<fastnbt::borrow::LongArray<'a>>,
     }
 
@@ -523,6 +553,15 @@ mod nbt {
         #[serde(rename = "Properties")]
         pub properties: Option<HashMap<Cow<'a, str>, Cow<'a, str>>>,
     }
+
+    #[derive(Deserialize, derive_more::Debug)]
+    pub(super) struct Biomes<'a> {
+        #[serde(borrow)]
+        pub palette: Vec<Cow<'a, str>>,
+        #[serde(borrow)]
+        #[debug(ignore)]
+        pub data: Option<fastnbt::borrow::LongArray<'a>>,
+    }
 }
 
 #[derive(Debug)]
@@ -532,14 +571,12 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn iter_blocks(&self) -> impl Iterator<Item = (BIndex, &BlockState)> {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef> {
         self.sections.iter().enumerate().flat_map(|(i, section)| {
             let y_offset = i * CHUNK_SIZE as usize;
-            section.iter_blocks().map(move |(bindex, block_state)| {
-                (
-                    BIndex((bindex.x(), bindex.z(), bindex.y() + y_offset as u32).into()),
-                    block_state,
-                )
+            section.iter_blocks().map(move |block| BlockRef {
+                index: block.index + BIndex((0, 0, y_offset as u32).into()),
+                ..block
             })
         })
     }
@@ -550,10 +587,12 @@ pub struct Section {
     pub base: BCoords,
     pub block_palette: Vec<BlockState>,
     pub block_indices: Vec<u16>,
+    pub biome_palette: Vec<String>,
+    pub biome_indices: Vec<u8>,
 }
 
 impl Section {
-    pub fn iter_blocks(&self) -> impl Iterator<Item = (BIndex, &BlockState)> {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef> {
         self.block_indices
             .iter()
             .enumerate()
@@ -561,10 +600,16 @@ impl Section {
                 let x = i & 0xF;
                 let z = (i >> 4) & 0xF;
                 let y = (i >> 8) & 0xF;
-                (
-                    BIndex((x as u32, z as u32, y as u32).into()),
-                    &self.block_palette[palette_index as usize],
-                )
+                let index = BIndex((x as u32, z as u32, y as u32).into());
+                let state = &self.block_palette[palette_index as usize];
+                let biome_index_index = ((y >> 2) << 4) | ((z >> 2) << 2) | (x >> 2);
+                let biome_index = self.biome_indices[biome_index_index] as usize;
+                let biome = self.biome_palette[biome_index].as_str();
+                BlockRef {
+                    index,
+                    state,
+                    biome,
+                }
             })
     }
 }
@@ -591,4 +636,12 @@ impl BlockState {
     pub fn get_property(&self, key: &str) -> Option<&str> {
         self.properties.get(key).map(|v| v.as_str())
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct BlockRef<'a> {
+    // coords: BCoords,
+    pub index: BIndex,
+    pub state: &'a BlockState,
+    pub biome: &'a str,
 }
