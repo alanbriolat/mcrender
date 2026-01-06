@@ -587,4 +587,8 @@ impl BlockState {
         self.properties.insert(key, value);
         self
     }
+
+    pub fn get_property(&self, key: &str) -> Option<&str> {
+        self.properties.get(key).map(|v| v.as_str())
+    }
 }
