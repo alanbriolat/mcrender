@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
-use image::{Rgba, RgbaImage};
+use image::{GenericImageView, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
 use crate::world::BlockState;
@@ -77,7 +77,9 @@ impl AssetCache {
         let path = path.as_ref();
         if !textures.contains_key(path) {
             log::debug!("loading texture {:?}", path);
-            let texture = image::open(self.path.join(path))?.to_rgba8();
+            let original_texture = image::open(self.path.join(path))?.to_rgba8();
+            // TODO: might not always want to do this, especially if using this method for non-block textures
+            let texture = original_texture.view(0, 0, 16, 16).to_image();
             textures.insert(path.to_owned(), Arc::new(texture));
         }
         textures
@@ -130,9 +132,8 @@ impl AssetCache {
         match name {
             "air" => Ok(None),
             "podzol" => self.create_solid_block_top_side("podzol_top", "podzol_side", block_state),
-            log if log.ends_with("_log") || log.ends_with("_stem") => {
-                self.create_solid_block_top_side(format!("{}_top", log).as_str(), log, block_state)
-            }
+            name @ "deepslate" | name if name.ends_with("_log") || name.ends_with("_stem") => self
+                .create_solid_block_top_side(format!("{}_top", name).as_str(), name, block_state),
             name => self.create_solid_block_uniform(name, block_state),
         }
     }
@@ -148,12 +149,10 @@ impl AssetCache {
         let side_texture = self.get_block_texture(side_name)?;
         let output = match block_state.get_property("axis") {
             None | Some("y") => self.render_solid_block(&top_texture, &side_texture, &side_texture),
-            // TODO: verify this is correct
             Some("x") => {
                 let rotated_side_texture = image::imageops::rotate90(side_texture.as_ref());
                 self.render_solid_block(&rotated_side_texture, &rotated_side_texture, &top_texture)
             }
-            // TODO: verify this is correct
             Some("z") => {
                 let rotated_side_texture = image::imageops::rotate90(side_texture.as_ref());
                 self.render_solid_block(&side_texture, &top_texture, &rotated_side_texture)
