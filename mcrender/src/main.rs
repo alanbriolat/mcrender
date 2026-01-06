@@ -31,11 +31,14 @@ struct Cli {
 enum Commands {
     AssetPreview {
         name: String,
-        // TODO: properties
-        // props: HashMap<String, String>,
+        /// Set a block state property
+        #[clap(short, long, value_name = "PROP=VALUE")]
+        prop: Vec<String>,
         // TODO: biome
+        /// Rescale image before display/output
         #[arg(long, default_value_t = 8)]
         scale: u32,
+        /// Write image to specified file
         #[arg(short, long)]
         target: Option<PathBuf>,
     },
@@ -59,12 +62,18 @@ fn main() -> Result<()> {
     match &cli.command {
         Commands::AssetPreview {
             name,
+            prop,
             scale,
             target,
         } => {
             let mut asset_cache = AssetCache::new(cli.assets.clone())?;
-            let block_state = world::BlockState::new(name.into());
-            // TODO: properties
+            let mut block_state = world::BlockState::new(name.into());
+            for raw_prop in prop.iter() {
+                let Some((key, value)) = raw_prop.split_once("=") else {
+                    return Err(anyhow!("invalid --prop argument: {:?}", raw_prop));
+                };
+                block_state = block_state.with_property(key.to_owned(), value.to_owned());
+            }
             // TODO: biome
             let asset = asset_cache
                 .get_asset(&block_state)
