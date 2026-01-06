@@ -1,7 +1,11 @@
-use anyhow::{Result, anyhow};
-use clap::Parser;
 use std::fs::File;
 use std::path::PathBuf;
+
+use anyhow::{Result, anyhow};
+use clap::Parser;
+use image::imageops::FilterType;
+use image::{Rgba, RgbaImage};
+use imageproc::rect::Rect;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -14,16 +18,33 @@ mod coords;
 mod render;
 mod world;
 
-#[derive(Debug, Parser)]
-struct Args {
+#[derive(Debug, clap::Parser)]
+struct Cli {
     #[arg(short, long)]
     assets: PathBuf,
-    #[arg(short, long)]
-    source: PathBuf,
-    #[arg(short, long)]
-    target: PathBuf,
-    #[arg(short, long)]
-    cache_dir: Option<PathBuf>,
+
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum Commands {
+    AssetPreview {
+        name: String,
+        // TODO: properties
+        // props: HashMap<String, String>,
+        // TODO: biome
+        #[arg(long, default_value_t = 8)]
+        scale: u32,
+        #[arg(short, long)]
+        target: Option<PathBuf>,
+    },
+    RenderTest {
+        source: PathBuf,
+        target: PathBuf,
+        #[arg(short, long)]
+        cache_dir: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -32,35 +53,85 @@ fn main() -> Result<()> {
         .with_span_events(FmtSpan::CLOSE)
         .init();
 
-    let args = Args::parse();
-    log::debug!("args: {:?}", args);
+    let cli = Cli::parse();
+    log::debug!("args: {:?}", cli);
 
-    let asset_cache = AssetCache::new(args.assets)?;
+    match &cli.command {
+        Commands::AssetPreview {
+            name,
+            scale,
+            target,
+        } => {
+            let mut asset_cache = AssetCache::new(cli.assets.clone())?;
+            let block_state = world::BlockState::new(name.into());
+            // TODO: properties
+            // TODO: biome
+            let asset = asset_cache
+                .get_asset(&block_state)
+                .ok_or(anyhow!("no such asset"))?;
+            let image = image::imageops::resize(
+                &asset.image,
+                asset.image.width() * scale,
+                asset.image.height() * scale,
+                FilterType::Nearest,
+            );
+            if let Some(target) = target {
+                log::info!("writing asset to {:?}", target);
+                let mut output_file = File::create(target)?;
+                image.write_to(&mut output_file, image::ImageFormat::Png)?;
+            } else {
+                log::info!("displaying asset");
+                let mut display_image = RgbaImage::new(image.width(), image.height());
+                let box_rect =
+                    Rect::at(0, 0).of_size(display_image.width(), display_image.height());
+                imageproc::drawing::draw_filled_rect_mut(
+                    &mut display_image,
+                    box_rect,
+                    Rgba([20, 30, 40, 255]),
+                );
+                image::imageops::overlay(&mut display_image, &image, 0, 0);
+                imageproc::window::display_image(
+                    "asset-preview",
+                    &display_image,
+                    display_image.width(),
+                    display_image.width(),
+                );
+            }
+        }
 
-    let world_info = world::WorldInfo::try_from_path(args.source)?;
-    log::debug!("world_info: {:?}", world_info);
-    let dim_info = world_info
-        .get_dimension(&DimensionID::Overworld)
-        .ok_or(anyhow!("no such dimension"))?;
-    // log::debug!("dim_info: {:?}", dim_info);
-    let region_info = dim_info
-        .get_region(RCoords((0, 0).into()))
-        .ok_or(anyhow!("no such region"))?;
-    // log::debug!("region_info: {:?}", region_info);
-    let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
-    // log::debug!("raw_chunk: {:?}", raw_chunk);
-    let chunk = raw_chunk.parse()?;
-    // log::debug!("chunk: {:?}", chunk);
+        Commands::RenderTest {
+            source,
+            target,
+            cache_dir,
+        } => {
+            let asset_cache = AssetCache::new(cli.assets)?;
+            let world_info = world::WorldInfo::try_from_path(source.clone())?;
+            log::debug!("world_info: {:?}", world_info);
+            let dim_info = world_info
+                .get_dimension(&DimensionID::Overworld)
+                .ok_or(anyhow!("no such dimension"))?;
+            // log::debug!("dim_info: {:?}", dim_info);
+            let region_info = dim_info
+                .get_region(RCoords((0, 0).into()))
+                .ok_or(anyhow!("no such region"))?;
+            // log::debug!("region_info: {:?}", region_info);
+            let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
+            // log::debug!("raw_chunk: {:?}", raw_chunk);
+            let chunk = raw_chunk.parse()?;
+            // log::debug!("chunk: {:?}", chunk);
+            let mut renderer = Renderer::new(asset_cache);
+            if let Some(cache_dir) = cache_dir {
+                renderer.set_render_cache(DirectoryRenderCache::new(cache_dir.clone())?);
+            }
+            let image = renderer.get_chunk(&raw_chunk)?;
+            // let image = renderer.get_region(&region_info)?;
 
-    let mut renderer = Renderer::new(asset_cache);
-    if let Some(cache_dir) = &args.cache_dir {
-        renderer.set_render_cache(DirectoryRenderCache::new(cache_dir.clone())?);
+            let mut output_file = File::create(target)?;
+            image.write_to(&mut output_file, image::ImageFormat::Png)?;
+        }
+
+        _ => unimplemented!(),
     }
-    // let image = renderer.get_chunk(&raw_chunk)?;
-    let image = renderer.get_region(&region_info)?;
-
-    let mut output_file = File::create(args.target.join("mcrender-output.png"))?;
-    image.write_to(&mut output_file, image::ImageFormat::Png)?;
 
     Ok(())
 }
