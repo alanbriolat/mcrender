@@ -22,6 +22,8 @@ mod world;
 struct Cli {
     #[arg(short, long)]
     assets: PathBuf,
+    #[arg(long, default_value_t = false)]
+    no_color: bool,
 
     #[clap(subcommand)]
     command: Commands,
@@ -34,7 +36,7 @@ enum Commands {
         /// Set a block state property
         #[arg(short, long, value_name = "PROP=VALUE")]
         prop: Vec<String>,
-        #[arg(long, default_value = "plains")]
+        #[arg(long, default_value = crate::asset::DEFAULT_BIOME)]
         biome: String,
         /// Rescale image before display/output
         #[arg(long, default_value_t = 8)]
@@ -52,12 +54,12 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_span_events(FmtSpan::CLOSE)
+        .with_ansi(!cli.no_color)
         .init();
-
-    let cli = Cli::parse();
     log::debug!("args: {:?}", cli);
 
     match &cli.command {
