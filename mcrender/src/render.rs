@@ -143,7 +143,7 @@ impl Renderer {
         let chunk = raw_chunk.parse()?;
         let mut output = RgbaImage::new(CHUNK_TILE_MAP.image_size.0, CHUNK_TILE_MAP.image_size.1);
         for block in chunk.iter_blocks() {
-            let Some(asset) = self.asset_cache.get_asset(block.state) else {
+            let Some(asset) = self.asset_cache.get_asset(&block) else {
                 continue;
             };
             let (output_x, output_y) =

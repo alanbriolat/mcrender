@@ -11,7 +11,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::asset::AssetCache;
 use crate::render::{DirectoryRenderCache, Renderer};
-use crate::world::{DimensionID, RCoords};
+use crate::world::{BIndex, BlockRef, DimensionID, RCoords};
 
 mod asset;
 mod coords;
@@ -32,9 +32,10 @@ enum Commands {
     AssetPreview {
         name: String,
         /// Set a block state property
-        #[clap(short, long, value_name = "PROP=VALUE")]
+        #[arg(short, long, value_name = "PROP=VALUE")]
         prop: Vec<String>,
-        // TODO: biome
+        #[arg(long, default_value = "plains")]
+        biome: String,
         /// Rescale image before display/output
         #[arg(long, default_value_t = 8)]
         scale: u32,
@@ -63,6 +64,7 @@ fn main() -> Result<()> {
         Commands::AssetPreview {
             name,
             prop,
+            biome,
             scale,
             target,
         } => {
@@ -74,9 +76,14 @@ fn main() -> Result<()> {
                 };
                 block_state = block_state.with_property(key.to_owned(), value.to_owned());
             }
+            let block_ref = BlockRef {
+                index: BIndex((0, 0, 0).into()),
+                state: &block_state,
+                biome,
+            };
             // TODO: biome
             let asset = asset_cache
-                .get_asset(&block_state)
+                .get_asset(&block_ref)
                 .ok_or(anyhow!("no such asset"))?;
             let image = image::imageops::resize(
                 &asset.image,

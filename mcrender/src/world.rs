@@ -571,7 +571,7 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef> {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef<'_>> {
         self.sections.iter().enumerate().flat_map(|(i, section)| {
             let y_offset = i * CHUNK_SIZE as usize;
             section.iter_blocks().map(move |block| BlockRef {
@@ -592,7 +592,7 @@ pub struct Section {
 }
 
 impl Section {
-    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef> {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef<'_>> {
         self.block_indices
             .iter()
             .enumerate()
