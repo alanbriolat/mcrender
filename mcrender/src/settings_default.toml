@@ -1,5 +1,6 @@
 # Minecraft biome tints for Java Edition, based on
 # https://minecraft.wiki/w/Block_colors (as of 2026-01-08).
+[biome_colors]
 
 # Grass colors, applied to:
 #   - grass_block (top and side overlay)

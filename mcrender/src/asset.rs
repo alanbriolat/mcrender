@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use image::{GenericImageView, Rgb, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
-use crate::settings::BiomeColors;
+use crate::settings::{BiomeColorMap, BiomeColors};
 use crate::world::BlockRef;
 
 pub const TILE_SIZE: u32 = 24;
@@ -238,6 +238,23 @@ impl<'s> AssetCache<'s> {
                 .get_or_create_asset(info, |info| {
                     self.create_solid_block_top_side(info, "_top", "")
                 }),
+            // Simple plant rendering, biome-unaware
+            "allium" | "azure_bluet" | "blue_orchid" | "cornflower" | "dandelion"
+            | "closed_eyeblossom" | "open_eyeblossom" | "lily_of_the_valley" | "oxeye_daisy"
+            | "poppy" | "torchflower" | "orange_tulip" | "pink_tulip" | "red_tulip"
+            | "white_tulip" | "wither_rose" | "lilac" | "peony" | "pitcher_plant" | "rose_bush"
+            | "sunflower" | "cactus_flower" | "dead_bush" | "short_dry_grass"
+            | "tall_dry_grass" | "hanging_roots" | "pale_hanging_moss" => {
+                self.get_or_create_asset(info, |info| self.create_plant_block(info, None))
+            }
+            b if b.ends_with("_sapling") => {
+                self.get_or_create_asset(info, |info| self.create_plant_block(info, None))
+            }
+            // Simple plant rendering, biome-aware (grass tint)
+            "bush" | "fern" | "large_fern" | "short_grass" | "tall_grass" | "sugar_cane" => self
+                .get_or_create_asset(info.with_biome(block.biome.to_owned()), |info| {
+                    self.create_plant_block(info, Some(&self.biome_colors.grass))
+                }),
             _ => self.get_or_create_asset(info, |info| self.create_solid_block_uniform(info)),
         }
     }
@@ -366,6 +383,30 @@ impl<'s> AssetCache<'s> {
         Ok(Some(Asset { image: output }))
     }
 
+    fn create_plant_block(
+        &self,
+        info: &AssetInfo,
+        color_map: Option<&BiomeColorMap>,
+    ) -> anyhow::Result<Option<Asset>> {
+        let name = info.short_name();
+        let suffix = match info.get_property("half") {
+            Some("lower") => "_bottom",
+            Some("upper") => "_top",
+            Some(other) => {
+                return Err(anyhow!("unsupported plant 'half' property: {other}"));
+            }
+            None => "",
+        };
+        let mut texture = (*self.get_block_texture(format!("{name}{suffix}"))?).clone();
+        if let Some(color_map) = color_map {
+            let biome = info.short_biome();
+            let biome_tint = color_map.get(biome);
+            tint_in_place(&mut texture, biome_tint);
+        }
+        let output = self.render_plant(&texture);
+        Ok(Some(Asset { image: output }))
+    }
+
     /// Render a solid block with the 3 specified face textures.
     fn render_solid_block(
         &self,
@@ -409,6 +450,33 @@ impl<'s> AssetCache<'s> {
         if let Some(tint_color) = tint {
             tint_in_place(&mut buffer, tint_color);
         }
+        buffer
+    }
+
+    fn render_plant(&self, texture: &RgbaImage) -> RgbaImage {
+        let mut buffer = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+        // let front_projection = flatten_projection([
+        //     Projection::scale(17./16., 13./16.),
+        //     Projection::translate(3.5, 5.5),
+        // ]);
+        // warp_into(
+        //     texture,
+        //     &front_projection,
+        //     Interpolation::Bilinear,
+        //     Rgba([0, 0, 0, 0]),
+        //     &mut buffer,
+        // );
+        let front_projection = flatten_projection([
+            Projection::scale(1., 12. / 16.),
+            Projection::translate(4., 6.),
+        ]);
+        warp_into(
+            texture,
+            &front_projection,
+            Interpolation::Nearest,
+            Rgba([0, 0, 0, 0]),
+            &mut buffer,
+        );
         buffer
     }
 }
