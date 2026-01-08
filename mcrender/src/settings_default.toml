@@ -1,0 +1,206 @@
+# Minecraft biome tints for Java Edition, based on
+# https://minecraft.wiki/w/Block_colors (as of 2026-01-08).
+
+# Grass colors, applied to:
+#   - grass_block (top and side overlay)
+#   - short_grass
+#   - tall_grass
+#   - fern
+#   - large_fern
+#   - potted_fern
+#   - bush
+#   - sugar_cane
+#   - pink_petals (stem only)
+#   - wildflowers (stem only)
+[biome_colors.grass]
+# Default color is white so untinted blocks stand out
+_default.color = 0xFFFFFF
+badlands.color = 0x90814D
+badlands.aliases = ["eroded_badlands", "wooded_badlands"]
+desert.color = 0xBFB755
+desert.aliases = [
+    "savanna", "savanna_plateau", "windswept_savanna",
+    "nether_wastes", "soul_sand_valley", "crimson_forest", "warped_forest", "basalt_deltas",
+]
+stony_peaks.color = 0x9ABE4B
+jungle.color = 0x59C93C
+jungle.aliases = ["bamboo_jungle"]
+sparse_jungle.color = 0x64C73F
+mushroom_fields.color = 0x55C93F
+plains.color = 0x91BD59
+plains.aliases = ["sunflower_plains", "beach", "dripstone_caves", "deep_dark"]
+swamp.color = 0x6A7039
+# swamp.color = 0x4C763C  # Apparently these 2 colors are applied with a noise function in-game
+forest.color = 0x79C05A
+forest.aliases = ["flower_forest"]
+dark_forest.color = 0x507A32
+pale_garden.color = 0x878D76
+birch_forest.color = 0x88BB67
+birch_forest.aliases = ["old_growth_birch_forest"]
+ocean.color = 0x8EB971
+ocean.aliases = [
+    "deep_ocean",
+    "warm_ocean", "lukewarm_ocean", "deep_lukewarm_ocean",
+    "cold_ocean", "deep_cold_ocean", "deep_frozen_ocean",
+    "river",
+    "lush_caves",
+    "the_end", "end_highlands", "end_midlands", "small_end_islands", "end_barrens",
+    "the_void",
+]
+meadow.color = 0x83BB6D
+cherry_grove.color = 0xB6DB61
+old_growth_pine_taiga.color = 0x86B87F
+taiga.color = 0x86B783
+taiga.aliases = ["old_growth_spruce_taiga"]
+windswept_hills.color = 0x8AB689
+windswept_hills.aliases = [
+    "windswept_gravelly_hills", "windswept_forest",
+    "stony_shore",
+]
+snowy_beach.color = 0x83B593
+snowy_plains.color = 0x80B497
+snowy_plains.aliases = [
+    "snowy_taiga", "snowy_slopes",
+    "ice_spikes",
+    "frozen_ocean", "frozen_river",
+    "frozen_peaks", "grove",
+    "jagged_peaks",
+]
+
+
+# Foliage colors, applied to:
+#   - oak_leaves
+#   - jungle_leaves
+#   - acacia_leaves
+#   - dark_oak_leaves
+#   - mangrove_leaves
+#   - vines
+[biome_colors.foliage]
+# Default color is white so untinted blocks stand out
+_default.color = 0xFFFFFF
+badlands.color = 0x9E814D
+badlands.aliases = ["eroded_badlands", "wooded_badlands"]
+desert.color = 0xAEA42A
+desert.aliases = [
+    "savanna", "savanna_plateau", "windswept_savanna",
+    "nether_wastes", "soul_sand_valley", "crimson_forest", "warped_forest", "basalt_deltas",
+]
+stony_peaks.color = 0x82AC1E
+jungle.color = 0x30BB0B
+jungle.aliases = ["bamboo_jungle"]
+sparse_jungle.color = 0x3EB80F
+mushroom_fields.color = 0x2BBB0F
+plains.color = 0x77AB2F
+plains.aliases = ["sunflower_plains", "beach", "dripstone_caves", "deep_dark"]
+swamp.color = 0x6A7039
+mangrove_swamp.color = 0x8DB127
+forest.color = 0x59AE30
+forest.aliases = ["flower_forest", "dark_forest"]
+pale_garden.color = 0x878D76
+birch_forest.color = 0x6BA941
+birch_forest.aliases = ["old_growth_birch_forest"]
+ocean.color = 0x71A74D
+ocean.aliases = [
+    "deep_ocean",
+    "warm_ocean", "lukewarm_ocean", "deep_lukewarm_ocean",
+    "cold_ocean", "deep_cold_ocean", "deep_frozen_ocean",
+    "river",
+    "lush_caves",
+    "the_end", "end_highlands", "end_midlands", "small_end_islands", "end_barrens",
+    "the_void",
+]
+meadow.color = 0x63A948
+cherry_grove.color = 0xB6DB61
+old_growth_pine_taiga.color = 0x68A55F
+taiga.color = 0x68A464
+taiga.aliases = ["old_growth_spruce_taiga"]
+windswept_hills.color = 0x6DA36B
+windswept_hills.aliases = [
+    "windswept_gravelly_hills", "windswept_forest",
+    "stony_shore",
+]
+snowy_beach.color = 0x64A278
+snowy_plains.color = 0x60A17B
+snowy_plains.aliases = [
+    "snowy_taiga", "snowy_slopes",
+    "ice_spikes",
+    "frozen_ocean", "frozen_river",
+    "frozen_peaks", "grove",
+    "jagged_peaks",
+]
+
+
+# Dry foliage colors, applied to:
+#   - leaf_litter
+[biome_colors.dry_foliage]
+# Default color is white so untinted blocks stand out
+_default.color = 0xFFFFFF
+badlands.color = 0x9E814D
+badlands.aliases = ["eroded_badlands", "wooded_badlands"]
+desert.color = 0xA38046
+desert.aliases = [
+    "savanna", "savanna_plateau", "windswept_savanna",
+    "nether_wastes", "soul_sand_valley", "crimson_forest", "warped_forest", "basalt_deltas",
+]
+stony_peaks.color = 0x927957
+jungle.color = 0xA36346
+jungle.aliases = ["bamboo_jungle", "sparse_jungle"]
+mushroom_fields.color = 0xA36246
+plains.color = 0xA37546
+plains.aliases = ["sunflower_plains", "beach", "dripstone_caves", "deep_dark"]
+swamp.color = 0x7B5334
+swamp.aliases = ["mangrove_swamp", "dark_forest"]
+forest.color = 0xA36D46
+forest.aliases = ["flower_forest"]
+pale_garden.color = 0xA0A69C
+birch_forest.color = 0xA37246
+birch_forest.aliases = ["old_growth_birch_forest"]
+ocean.color = 0xA17448
+ocean.aliases = [
+    "deep_ocean",
+    "warm_ocean", "lukewarm_ocean", "deep_lukewarm_ocean",
+    "cold_ocean", "deep_cold_ocean", "deep_frozen_ocean",
+    "river",
+    "lush_caves",
+    "the_end", "end_highlands", "end_midlands", "small_end_islands", "end_barrens",
+    "the_void",
+]
+cherry_grove.color = 0xA17148
+cherry_grove.aliases = ["meadow"]
+old_growth_pine_taiga.color = 0x9C754D
+taiga.color = 0x9A764F
+taiga.aliases = ["old_growth_spruce_taiga"]
+windswept_hills.color = 0x977752
+windswept_hills.aliases = [
+    "windswept_gravelly_hills", "windswept_forest",
+    "stony_shore",
+]
+snowy_beach.color = 0x917958
+snowy_plains.color = 0x8F7A5A
+snowy_plains.aliases = [
+    "snowy_taiga", "snowy_slopes",
+    "ice_spikes",
+    "frozen_ocean", "frozen_river",
+    "frozen_peaks", "grove",
+    "jagged_peaks",
+]
+
+
+# Water colors, applied to:
+#   - water
+#   - water_cauldron
+[biome_colors.water]
+# Default color is that which covers most biomes, to simplify the config
+_default.color = 0x3F76E4
+cold_ocean.color = 0x3D57D6
+cold_ocean.aliases = ["deep_cold_ocean", "snowy_taiga", "snowy_beach"]
+frozen_ocean.color = 0x3938C9
+frozen_ocean.aliases = ["deep_frozen_ocean", "frozen_river"]
+lukewarm_ocean.color = 0x45ADF2
+lukewarm_ocean.aliases = ["deep_lukewarm_ocean"]
+swamp.color = 0x617B64
+warm_ocean.color = 0x43D5EE
+meadow.color = 0x0E4ECF
+mangrove_swamp.color = 0x3A7A6A
+cherry_grove.color = 0x5DB7EF
+pale_garden.color = 0x76889D

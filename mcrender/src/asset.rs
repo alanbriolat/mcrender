@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use image::{GenericImageView, Rgb, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
+use crate::settings::BiomeColors;
 use crate::world::BlockRef;
 
 pub const TILE_SIZE: u32 = 24;
@@ -86,13 +87,14 @@ impl std::fmt::Display for AssetInfo {
     }
 }
 
-pub struct AssetCache {
+pub struct AssetCache<'s> {
     path: PathBuf,
     textures: Mutex<HashMap<PathBuf, Arc<RgbaImage>>>,
     assets: Mutex<HashMap<AssetInfo, Option<Arc<Asset>>>>,
     projection_east: Projection,
     projection_south: Projection,
     projection_top: Projection,
+    biome_colors: &'s BiomeColors,
     /// Block properties that always affect rendering if present.
     block_common_props: HashSet<String>,
 }
@@ -108,8 +110,8 @@ fn flatten_projection(projections: impl IntoIterator<Item = Projection>) -> Proj
 
 const BLOCK_TEXTURE_PATH: &str = "minecraft/textures/block";
 
-impl AssetCache {
-    pub fn new(path: PathBuf) -> anyhow::Result<AssetCache> {
+impl<'s> AssetCache<'s> {
+    pub fn new(path: PathBuf, biome_colors: &'s BiomeColors) -> anyhow::Result<AssetCache<'s>> {
         if !path.is_dir() || !path.join(".mcassetsroot").exists() {
             Err(anyhow::anyhow!("not a minecraft assets dir"))
         } else {
@@ -134,6 +136,7 @@ impl AssetCache {
                     Projection::scale(1.0, 0.5),
                     Projection::translate(11.5, 5.5),
                 ]),
+                biome_colors,
                 block_common_props: HashSet::from_iter(
                     [
                         "age",
@@ -316,7 +319,7 @@ impl AssetCache {
 
     fn create_grass_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
         let biome = info.short_biome();
-        let biome_tint = biome_grass_tint(biome);
+        let biome_tint = self.biome_colors.grass.get(biome);
         log::debug!(
             "got tint: biome={biome} tint=#{:X}{:X}{:X}",
             biome_tint[0],
@@ -335,7 +338,7 @@ impl AssetCache {
 
     fn create_leaf_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
         let biome = info.short_biome();
-        let biome_tint = biome_foliage_tint(biome);
+        let biome_tint = self.biome_colors.foliage.get(biome);
         log::debug!(
             "got tint: biome={biome} tint=#{:X}{:X}{:X}",
             biome_tint[0],
@@ -350,7 +353,7 @@ impl AssetCache {
 
     fn create_water_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
         let biome = info.short_biome();
-        let biome_tint = biome_water_tint(biome);
+        let biome_tint = self.biome_colors.water.get(biome);
         // let mut texture = (*self.get_block_texture("water_still")?).clone();
         let mut texture = RgbaImage::from_pixel(16, 16, Rgba([255, 255, 255, 120]));
         tint_in_place(&mut texture, biome_tint);
@@ -410,15 +413,6 @@ impl AssetCache {
     }
 }
 
-macro_rules! rgb_const {
-    ($($vis:vis $id:ident : $val:expr);* $(;)?) => {
-        $(
-            // #[allow(unused)]
-            const $id: Rgb<u8> = Rgb([(($val as u32) >> 16) as u8, (($val as u32) >> 8) as u8, (($val as u32) as u8)]);
-        )*
-    };
-}
-
 #[derive(Clone, Debug, Default)]
 struct SolidBlockTints {
     top: Option<Rgb<u8>>,
@@ -436,176 +430,6 @@ const TINT_BLOCK_3D: SolidBlockTints = SolidBlockTints {
     south: Some(Rgb([220, 220, 220])),
     east: Some(Rgb([200, 200, 200])),
 };
-
-// https://minecraft.wiki/w/Block_colors
-rgb_const!(
-    TINT_GRASS_BADLANDS: 0x90814D;
-    TINT_GRASS_DESERT: 0xBFB755;
-    TINT_GRASS_STONY_PEAKS: 0x9ABE4B;
-    TINT_GRASS_JUNGLE: 0x59C93C;
-    TINT_GRASS_SPARSE_JUNGLE: 0x64C73F;
-    TINT_GRASS_MUSHROOM_FIELDS: 0x55C93F;
-    TINT_GRASS_PLAINS: 0x91BD59;
-    TINT_GRASS_SWAMP: 0x6A7039;
-    // TINT_GRASS_SWAMP: 0x4C763C;
-    TINT_GRASS_FOREST: 0x79C05A;
-    TINT_GRASS_DARK_FOREST: 0x507A32;
-    TINT_GRASS_PALE_GARDEN: 0x878D76;
-    TINT_GRASS_BIRCH_FOREST: 0x88BB67;
-    TINT_GRASS_OCEAN: 0x8EB971;
-    TINT_GRASS_MEADOW: 0x83BB6D;
-    TINT_GRASS_CHERRY_GROVE: 0xB6DB61;
-    TINT_GRASS_TAIGA_OLD_PINE: 0x86B87F;
-    TINT_GRASS_TAIGA: 0x86B783;
-    TINT_GRASS_WINDSWEPT_HILLS: 0x8AB689;
-    TINT_GRASS_SNOWY_BEACH: 0x83B593;
-    TINT_GRASS_SNOWY_PLAINS: 0x80B497;
-);
-
-// https://minecraft.wiki/w/Block_colors
-rgb_const!(
-    TINT_FOLIAGE_BADLANDS: 0x9E814D;
-    TINT_FOLIAGE_DESERT: 0xAEA42A;
-    TINT_FOLIAGE_STONY_PEAKS: 0x82AC1E;
-    TINT_FOLIAGE_JUNGLE: 0x30BB0B;
-    TINT_FOLIAGE_SPARSE_JUNGLE: 0x3EB80F;
-    TINT_FOLIAGE_MUSHROOM_FIELDS: 0x2BBB0F;
-    TINT_FOLIAGE_PLAINS: 0x77AB2F;
-    TINT_FOLIAGE_SWAMP: 0x6A7039;
-    TINT_FOLIAGE_MANGROVE_SWAMP: 0x8DB127;
-    TINT_FOLIAGE_FOREST: 0x59AE30;
-    TINT_FOLIAGE_PALE_GARDEN: 0x878D76;
-    TINT_FOLIAGE_BIRCH_FOREST: 0x6BA941;
-    TINT_FOLIAGE_OCEAN: 0x71A74D;
-    TINT_FOLIAGE_MEADOW: 0x63A948;
-    TINT_FOLIAGE_CHERRY_GROVE: 0xB6DB61;
-    TINT_FOLIAGE_TAIGA_OLD_PINE: 0x68A55F;
-    TINT_FOLIAGE_TAIGA: 0x68A464;
-    TINT_FOLIAGE_WINDSWEPT_HILLS: 0x6DA36B;
-    TINT_FOLIAGE_SNOWY_BEACH: 0x64A278;
-    TINT_FOLIAGE_SNOWY_PLAINS: 0x60A17B;
-);
-
-// https://minecraft.wiki/w/Block_colors
-rgb_const!(
-    TINT_WATER_DEFAULT: 0x3F76E4;
-    TINT_WATER_COLD: 0x3D57D6;
-    TINT_WATER_FROZEN: 0x3938C9;
-    TINT_WATER_LUKEWARM: 0x45ADF2;
-    TINT_WATER_SWAMP: 0x617B64;
-    TINT_WATER_WARM: 0x43D5EE;
-    TINT_WATER_MEADOW: 0x0E4ECF;
-    TINT_WATER_MANGROVE_SWAMP: 0x3A7A6A;
-    TINT_WATER_CHERRY_GROVE: 0x5DB7EF;
-    TINT_WATER_PALE_GARDEN: 0x76889D;
-);
-
-fn biome_grass_tint(biome: &str) -> Rgb<u8> {
-    match biome {
-        b if b.contains("badlands") => TINT_GRASS_BADLANDS,
-        "desert" => TINT_GRASS_DESERT,
-        b if b.contains("savanna") => TINT_GRASS_DESERT,
-        "nether_wastes" | "soul_sand_valley" | "crimson_forest" | "warped_forest"
-        | "basalt_deltas" => TINT_GRASS_DESERT,
-        "stony_peaks" => TINT_GRASS_STONY_PEAKS,
-        "jungle" | "bamboo_jungle" => TINT_GRASS_JUNGLE,
-        "sparse_jungle" => TINT_GRASS_SPARSE_JUNGLE,
-        "mushroom_fields" => TINT_GRASS_MUSHROOM_FIELDS,
-        "plains" | "sunflower_plains" | "beach" | "dripstone_caves" | "deep_dark" => {
-            TINT_GRASS_PLAINS
-        }
-        "swamp" | "mangrove_swamp" => TINT_GRASS_SWAMP,
-        "forest" | "flower_forest" => TINT_GRASS_FOREST,
-        "dark_forest" => TINT_GRASS_DARK_FOREST,
-        "pale_garden" => TINT_GRASS_PALE_GARDEN,
-        "birch_forest" | "old_growth_birch_forest" => TINT_GRASS_BIRCH_FOREST,
-        "ocean" | "deep_ocean" => TINT_GRASS_OCEAN,
-        "warm_ocean" | "lukewarm_ocean" | "deep_lukewarm_ocean" => TINT_GRASS_OCEAN,
-        "cold_ocean" | "deep_cold_ocean" | "deep_frozen_ocean" => TINT_GRASS_OCEAN,
-        "river" | "lush_caves" => TINT_GRASS_OCEAN,
-        "the_end" | "end_highlands" | "end_midlands" | "small_end_islands" | "end_barrens" => {
-            TINT_GRASS_OCEAN
-        }
-        "the_void" => TINT_GRASS_OCEAN,
-        "meadow" => TINT_GRASS_MEADOW,
-        "cherry_grove" => TINT_GRASS_CHERRY_GROVE,
-        "old_growth_pine_taiga" => TINT_GRASS_TAIGA_OLD_PINE,
-        "taiga" | "old_growth_spruce_taiga" => TINT_GRASS_TAIGA,
-        "windswept_hills" | "windswept_gravelly_hills" | "windswept_forest" | "stony_shore" => {
-            TINT_GRASS_WINDSWEPT_HILLS
-        }
-        "snowy_beach" => TINT_GRASS_SNOWY_BEACH,
-        b if b.starts_with("snowy_") => TINT_GRASS_SNOWY_PLAINS,
-        "ice_spikes" | "frozen_ocean" | "frozen_river" | "grove" | "frozen_peaks"
-        | "jagged_peaks" => TINT_GRASS_SNOWY_PLAINS,
-        // Default tint = white so it shows up where it's not being handled
-        _ => {
-            log::warn!("unhandled biome {biome:?}");
-            Rgb([0xFF, 0xFF, 0xFF])
-        }
-    }
-}
-
-fn biome_foliage_tint(biome: &str) -> Rgb<u8> {
-    match biome {
-        b if b.contains("badlands") => TINT_FOLIAGE_BADLANDS,
-        "desert" => TINT_FOLIAGE_DESERT,
-        b if b.contains("savanna") => TINT_FOLIAGE_DESERT,
-        "nether_wastes" | "soul_sand_valley" | "crimson_forest" | "warped_forest"
-        | "basalt_deltas" => TINT_FOLIAGE_DESERT,
-        "stony_peaks" => TINT_FOLIAGE_STONY_PEAKS,
-        "jungle" | "bamboo_jungle" => TINT_FOLIAGE_JUNGLE,
-        "sparse_jungle" => TINT_FOLIAGE_SPARSE_JUNGLE,
-        "mushroom_fields" => TINT_FOLIAGE_MUSHROOM_FIELDS,
-        "plains" | "sunflower_plains" | "beach" | "dripstone_caves" | "deep_dark" => {
-            TINT_FOLIAGE_PLAINS
-        }
-        "swamp" => TINT_FOLIAGE_SWAMP,
-        "mangrove_swamp" => TINT_FOLIAGE_MANGROVE_SWAMP,
-        "forest" | "flower_forest" | "dark_forest" => TINT_FOLIAGE_FOREST,
-        "pale_garden" => TINT_FOLIAGE_PALE_GARDEN,
-        "birch_forest" | "old_growth_birch_forest" => TINT_FOLIAGE_BIRCH_FOREST,
-        "ocean" | "deep_ocean" => TINT_FOLIAGE_OCEAN,
-        "warm_ocean" | "lukewarm_ocean" | "deep_lukewarm_ocean" => TINT_FOLIAGE_OCEAN,
-        "cold_ocean" | "deep_cold_ocean" | "deep_frozen_ocean" => TINT_FOLIAGE_OCEAN,
-        "river" | "lush_caves" => TINT_FOLIAGE_OCEAN,
-        "the_end" | "end_highlands" | "end_midlands" | "small_end_islands" | "end_barrens" => {
-            TINT_FOLIAGE_OCEAN
-        }
-        "the_void" => TINT_FOLIAGE_OCEAN,
-        "meadow" => TINT_FOLIAGE_MEADOW,
-        "cherry_grove" => TINT_FOLIAGE_CHERRY_GROVE,
-        "old_growth_pine_taiga" => TINT_FOLIAGE_TAIGA_OLD_PINE,
-        "taiga" | "old_growth_spruce_taiga" => TINT_FOLIAGE_TAIGA,
-        "windswept_hills" | "windswept_gravelly_hills" | "windswept_forest" | "stony_shore" => {
-            TINT_FOLIAGE_WINDSWEPT_HILLS
-        }
-        "snowy_beach" => TINT_FOLIAGE_SNOWY_BEACH,
-        b if b.starts_with("snowy_") => TINT_FOLIAGE_SNOWY_PLAINS,
-        "ice_spikes" | "frozen_ocean" | "frozen_river" | "grove" | "frozen_peaks"
-        | "jagged_peaks" => TINT_FOLIAGE_SNOWY_PLAINS,
-        // Default tint = white so it shows up where it's not being handled
-        _ => {
-            log::warn!("unhandled biome {biome:?}");
-            Rgb([0xFF, 0xFF, 0xFF])
-        }
-    }
-}
-
-fn biome_water_tint(biome: &str) -> Rgb<u8> {
-    match biome {
-        "cold_ocean" | "deep_cold_ocean" | "snowy_taiga" | "snowy_beach" => TINT_WATER_COLD,
-        "frozen_ocean" | "deep_frozen_ocean" | "frozen_river" => TINT_WATER_FROZEN,
-        "lukewarm_ocean" | "deep_lukewarm_ocean" => TINT_WATER_LUKEWARM,
-        "swamp" => TINT_WATER_SWAMP,
-        "warm_ocean" => TINT_WATER_WARM,
-        "meadow" => TINT_WATER_MEADOW,
-        "mangrove_swamp" => TINT_WATER_MANGROVE_SWAMP,
-        "cherry_grove" => TINT_WATER_CHERRY_GROVE,
-        "pale_garden" => TINT_WATER_PALE_GARDEN,
-        _ => TINT_WATER_DEFAULT,
-    }
-}
 
 fn tint(image: &RgbaImage, tint: Rgb<u8>) -> RgbaImage {
     let mut output = image.clone();

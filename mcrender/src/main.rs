@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
+use config::FileFormat;
 use image::imageops::FilterType;
 use image::{Rgba, RgbaImage};
 use imageproc::rect::Rect;
@@ -11,11 +12,13 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::asset::AssetCache;
 use crate::render::{DirectoryRenderCache, Renderer};
+use crate::settings::Settings;
 use crate::world::{BIndex, BlockRef, DimensionID, RCoords};
 
 mod asset;
 mod coords;
 mod render;
+mod settings;
 mod world;
 
 #[derive(Debug, clap::Parser)]
@@ -24,6 +27,8 @@ struct Cli {
     assets: PathBuf,
     #[arg(long, default_value_t = false)]
     no_color: bool,
+    #[arg(short, long)]
+    config: Vec<String>,
 
     #[clap(subcommand)]
     command: Commands,
@@ -62,6 +67,14 @@ fn main() -> Result<()> {
         .init();
     log::debug!("args: {:?}", cli);
 
+    let mut builder = Settings::config_builder();
+    for config_path in cli.config {
+        builder = builder.add_source(config::File::new(config_path.as_str(), FileFormat::Toml));
+    }
+    let config = builder.build()?;
+    let settings = Settings::from_config(&config)?;
+    log::debug!("settings: {:?}", settings);
+
     match &cli.command {
         Commands::AssetPreview {
             name,
@@ -70,7 +83,7 @@ fn main() -> Result<()> {
             scale,
             target,
         } => {
-            let mut asset_cache = AssetCache::new(cli.assets.clone())?;
+            let mut asset_cache = AssetCache::new(cli.assets.clone(), &settings.biome_colors)?;
             let mut block_state = world::BlockState::new(name.into());
             for raw_prop in prop.iter() {
                 let Some((key, value)) = raw_prop.split_once("=") else {
@@ -122,7 +135,7 @@ fn main() -> Result<()> {
             target,
             cache_dir,
         } => {
-            let asset_cache = AssetCache::new(cli.assets)?;
+            let asset_cache = AssetCache::new(cli.assets, &settings.biome_colors)?;
             let world_info = world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info

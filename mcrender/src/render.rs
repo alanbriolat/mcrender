@@ -106,13 +106,13 @@ impl RenderCache for DirectoryRenderCache {
     }
 }
 
-pub struct Renderer {
-    asset_cache: AssetCache,
+pub struct Renderer<'s> {
+    asset_cache: AssetCache<'s>,
     render_cache: Box<dyn RenderCache>,
 }
 
-impl Renderer {
-    pub fn new(asset_cache: AssetCache) -> Self {
+impl<'s> Renderer<'s> {
+    pub fn new(asset_cache: AssetCache<'s>) -> Self {
         Self {
             asset_cache,
             render_cache: Box::new(NoCache()),
