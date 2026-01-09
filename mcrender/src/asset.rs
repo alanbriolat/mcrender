@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
+use image::imageops::overlay;
 use image::{GenericImageView, Rgb, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
@@ -255,6 +257,7 @@ impl<'s> AssetCache<'s> {
                 .get_or_create_asset(info.with_biome(block.biome.to_owned()), |info| {
                     self.create_plant_block(info, Some(&self.biome_colors.grass))
                 }),
+            "seagrass" => self.get_or_create_asset(info, |info| self.create_crop_block(info)),
             _ => self.get_or_create_asset(info, |info| self.create_solid_block_uniform(info)),
         }
     }
@@ -348,7 +351,7 @@ impl<'s> AssetCache<'s> {
         let mut side_overlay = (*self.get_block_texture("grass_block_side_overlay")?).clone();
         tint_in_place(&mut side_overlay, biome_tint);
         let mut side = (*self.get_block_texture("dirt")?).clone();
-        image::imageops::overlay(&mut side, &side_overlay, 0, 0);
+        overlay(&mut side, &side_overlay, 0, 0);
         let output = self.render_solid_block(&top, &side, &side, &TINT_BLOCK_3D);
         Ok(Some(Asset { image: output }))
     }
@@ -407,6 +410,13 @@ impl<'s> AssetCache<'s> {
         Ok(Some(Asset { image: output }))
     }
 
+    fn create_crop_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
+        let name = info.short_name();
+        let texture = self.get_block_texture(name)?;
+        let output = self.render_crop(&texture);
+        Ok(Some(Asset { image: output }))
+    }
+
     /// Render a solid block with the 3 specified face textures.
     fn render_solid_block(
         &self,
@@ -419,9 +429,9 @@ impl<'s> AssetCache<'s> {
         let south = self.render_block_face(south_texture, Face::South, tints.south);
         let east = self.render_block_face(east_texture, Face::East, tints.east);
         let mut output = RgbaImage::new(TILE_SIZE, TILE_SIZE);
-        image::imageops::overlay(&mut output, &east, 0, 0);
-        image::imageops::overlay(&mut output, &south, 0, 0);
-        image::imageops::overlay(&mut output, &top, 0, 0);
+        overlay(&mut output, &east, 0, 0);
+        overlay(&mut output, &south, 0, 0);
+        overlay(&mut output, &top, 0, 0);
         output
     }
 
@@ -453,19 +463,10 @@ impl<'s> AssetCache<'s> {
         buffer
     }
 
+    /// Render a simple plant, where in-game a single-texture is rendered in an X in the
+    /// bottom-center of the block.
     fn render_plant(&self, texture: &RgbaImage) -> RgbaImage {
         let mut buffer = RgbaImage::new(TILE_SIZE, TILE_SIZE);
-        // let front_projection = flatten_projection([
-        //     Projection::scale(17./16., 13./16.),
-        //     Projection::translate(3.5, 5.5),
-        // ]);
-        // warp_into(
-        //     texture,
-        //     &front_projection,
-        //     Interpolation::Bilinear,
-        //     Rgba([0, 0, 0, 0]),
-        //     &mut buffer,
-        // );
         let front_projection = flatten_projection([
             Projection::scale(1., 12. / 16.),
             Projection::translate(4., 6.),
@@ -478,6 +479,33 @@ impl<'s> AssetCache<'s> {
             &mut buffer,
         );
         buffer
+    }
+
+    /// Render a slightly more complex plant, where in-game a single texture is rendered in a #
+    /// shape in the bottom-center of the block.
+    fn render_crop(&self, texture: &RgbaImage) -> RgbaImage {
+        let south = self.render_block_face(texture, Face::South, TINT_BLOCK_NONE.south);
+        let south_back = south.view(0, 6, 2, 13);
+        let south_mid = south.view(2, 7, 8, 16);
+        let south_front = south.view(10, 11, 2, 13);
+        let east = self.render_block_face(texture, Face::East, TINT_BLOCK_NONE.east);
+        let east_back = east.view(22, 6, 2, 13);
+        let east_mid = east.view(14, 7, 8, 16);
+        let east_front = east.view(12, 11, 2, 13);
+        let mut output = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+        overlay(&mut output, south_back.deref(), 10, 1);
+        overlay(&mut output, east_back.deref(), 12, 1);
+        overlay(&mut output, south_back.deref(), 2, 5);
+        overlay(&mut output, east_mid.deref(), 4, 2);
+        overlay(&mut output, south_mid.deref(), 12, 2);
+        overlay(&mut output, east_back.deref(), 20, 5);
+        overlay(&mut output, east_front.deref(), 2, 6);
+        overlay(&mut output, south_mid.deref(), 4, 6);
+        overlay(&mut output, east_mid.deref(), 12, 6);
+        overlay(&mut output, south_front.deref(), 20, 6);
+        overlay(&mut output, east_front.deref(), 10, 10);
+        overlay(&mut output, south_front.deref(), 12, 10);
+        output
     }
 }
 
