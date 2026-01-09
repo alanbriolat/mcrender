@@ -1,3 +1,161 @@
+[asset_rules._default]
+render.type = "solid_uniform"
+properties = [
+    "age",
+    "axis",
+    "berries",
+    "bites",
+    "down",
+    "east",
+    "eggs",
+    "eye",
+    "face",
+    "facing",
+    "flower_amount",
+    "half",
+    "hinge",
+    "layers",
+    "moisture",
+    "north",
+    "open",
+    "orientation",
+    "part",
+    "pickles",
+    "powered",
+    "segment_amount",
+    "shape",
+    "snowy",
+    "south",
+    "type",
+    "up",
+    "waterlogged",
+    "west",
+]
+
+[asset_rules.no_render]
+names = ["air", "the_void"]
+render.type = "nothing"
+
+[asset_rules.water]
+names = ["water", "flowing_water"]
+render.type = "water"
+render.tint_color = { biome_lookup = "water" }
+properties = ["falling", "level"]
+
+[asset_rules.grass_block]
+names = ["grass_block"]
+render.type = "grass"
+render.tint_color = { biome_lookup = "grass" }
+
+[asset_rules.simple_plants]
+names = [
+    # Small flowers (https://minecraft.wiki/w/Flower#Small_flowers)
+    "allium", "azure_bluet", "blue_orchid", "cornflower", "dandelion",
+    "closed_eyeblossom", "open_eyeblossom", "lily_of_the_valley", "oxeye_daisy",
+    "poppy", "torchflower", "orange_tulip", "pink_tulip", "red_tulip", "white_tulip",
+    "wither_rose",
+    # Tall flowers (https://minecraft.wiki/w/Flower#Tall_flowers)
+    "lilac", "peony", "pitcher_plant", "rose_bush",
+    # "sunflower",  # This one doesn't render like the others
+    # Saplings
+    "oak_sapling", "spruce_sapling", "birch_sapling", "dark_oak_sapling", "jungle_sapling",
+    "acacia_sapling", "cherry_sapling", "pale_oak_sapling", "mangrove_propagule",
+    # Mushrooms
+    "brown_bushroom", "red_mushroom",
+    "crimson_fungus", "warped_fungus",
+    # Other things that render the same way
+    "cactus_flower", "dead_bush", "short_dry_grass", "tall_dry_grass",
+    "hanging_roots", "pale_hanging_moss",
+]
+render.type = "plant"
+render.texture = [
+    "name",
+    # Adds suffix for tall plants, does nothing for short plants
+    { property_map = { name = "half", values = { lower = "_bottom", upper = "_top" } } },
+]
+
+[asset_rules.grass_biome_plants]
+names = ["bush", "fern", "large_fern", "short_grass", "tall_grass", "sugar_cane"]
+render.type = "plant"
+render.tint_color = { biome_lookup = "grass" }
+render.texture = [
+    "name",
+    # Adds suffix for tall plants, does nothing for short plants
+    { property_map = { name = "half", values = { lower = "_bottom", upper = "_top" } } },
+]
+
+[asset_rules.crop_like_plants]
+names = ["seagrass"]
+render.type = "crop"
+
+[asset_rules.plant_stage_direct]
+names = ["sweet_berry_bush"]
+render.type = "plant"
+render.texture = [
+    "name",
+    {literal = "_stage"},
+    {property = "age"},
+]
+
+[asset_rules.crop_stage_direct]
+names = ["beetroots", "wheat"]
+render.type = "crop"
+render.texture = [
+    "name",
+    {literal = "_stage"},
+    {property = "age"},
+]
+
+[asset_rules.crop_stage_mapped]
+names = ["carrots", "potatoes"]
+render.type = "crop"
+render.texture = [
+    "name",
+    {literal = "_stage"},
+    {property_map = {name = "age", values = {"0" = "0", "1" = "0", "2" = "1", "3" = "1", "4" = "2", "5" = "2", "6" = "2", "7" = "3"}}},
+]
+
+[asset_rules.log_like]
+names = [
+    # Overworld trees
+    "acacia_log", "stripped_acacia_log",
+    "birch_log", "stripped_birch_log",
+    "cherry_log", "stripped_cherry_log",
+    "dark_oak_log", "stripped_dark_oak_log",
+    "jungle_log", "stripped_jungle_log",
+    "mangrove_log", "stripped_mangrove_log",
+    "oak_log", "stripped_oak_log",
+    "pale_oak_log", "stripped_pale_oak_log",
+    "spruce_log", "stripped_spruce_log",
+    # Nether "trees"
+    "crimson_stem", "stripped_crimson_stem",
+    "warped_stem", "stripped_warped_stem",
+    # Yup, really.
+    "deepslate",
+]
+render.type = "solid_top_side"
+render.top_texture = [ "name", {literal = "_top"} ]
+render.side_texture = [ "name" ]
+
+[asset_rules.podzol]
+render.type = "solid_top_side"
+render.top_texture = [ "name", {literal = "_top"} ]
+render.side_texture = [ "name", {literal = "_side"} ]
+
+[asset_rules.biome_aware_leaves]
+names = ["acacia_leaves", "dark_oak_leaves", "jungle_leaves", "mangrove_leaves", "oak_leaves"]
+render.type = "leaves"
+render.tint_color = { biome_lookup = "foliage" }
+
+[asset_rules.birch_leaves]
+render.type = "leaves"
+render.tint_color = { literal = 0x80A755 }
+
+[asset_rules.spruce_leaves]
+render.type = "leaves"
+render.tint_color = { literal = 0x619961 }
+
+
 # Minecraft biome tints for Java Edition, based on
 # https://minecraft.wiki/w/Block_colors (as of 2026-01-08).
 [biome_colors]

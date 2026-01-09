@@ -73,7 +73,8 @@ fn main() -> Result<()> {
     }
     let config = builder.build()?;
     let settings = Settings::from_config(&config)?;
-    log::debug!("settings: {:?}", settings);
+    // log::debug!("biome_colors: {:#?}", &settings.biome_colors);
+    // log::debug!("asset_rules: {:#?}", &settings.asset_rules);
 
     match &cli.command {
         Commands::AssetPreview {
@@ -83,7 +84,7 @@ fn main() -> Result<()> {
             scale,
             target,
         } => {
-            let mut asset_cache = AssetCache::new(cli.assets.clone(), &settings.biome_colors)?;
+            let mut asset_cache = AssetCache::new(cli.assets.clone(), &settings)?;
             let mut block_state = world::BlockState::new(name.into());
             for raw_prop in prop.iter() {
                 let Some((key, value)) = raw_prop.split_once("=") else {
@@ -135,7 +136,7 @@ fn main() -> Result<()> {
             target,
             cache_dir,
         } => {
-            let asset_cache = AssetCache::new(cli.assets, &settings.biome_colors)?;
+            let asset_cache = AssetCache::new(cli.assets, &settings)?;
             let world_info = world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info

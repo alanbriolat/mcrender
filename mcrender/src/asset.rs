@@ -8,7 +8,7 @@ use image::imageops::overlay;
 use image::{GenericImageView, Rgb, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
-use crate::settings::{BiomeColorMap, BiomeColors};
+use crate::settings::{AssetRenderSpec, Settings};
 use crate::world::BlockRef;
 
 pub const TILE_SIZE: u32 = 24;
@@ -25,7 +25,7 @@ pub enum Face {
 }
 
 #[derive(Clone, Eq, PartialEq, Hash, derive_more::Deref, derive_more::DerefMut)]
-struct AssetInfo(BTreeMap<String, String>);
+pub struct AssetInfo(BTreeMap<String, String>);
 
 const PROP_NAME: &str = "_asset";
 const PROP_BIOME: &str = "_biome";
@@ -96,9 +96,7 @@ pub struct AssetCache<'s> {
     projection_east: Projection,
     projection_south: Projection,
     projection_top: Projection,
-    biome_colors: &'s BiomeColors,
-    /// Block properties that always affect rendering if present.
-    block_common_props: HashSet<String>,
+    settings: &'s Settings,
 }
 
 /// Flatten a sequence of projections into a single projection, in reverse order so they can be
@@ -113,7 +111,7 @@ fn flatten_projection(projections: impl IntoIterator<Item = Projection>) -> Proj
 const BLOCK_TEXTURE_PATH: &str = "minecraft/textures/block";
 
 impl<'s> AssetCache<'s> {
-    pub fn new(path: PathBuf, biome_colors: &'s BiomeColors) -> anyhow::Result<AssetCache<'s>> {
+    pub fn new(path: PathBuf, settings: &'s Settings) -> anyhow::Result<AssetCache<'s>> {
         if !path.is_dir() || !path.join(".mcassetsroot").exists() {
             Err(anyhow::anyhow!("not a minecraft assets dir"))
         } else {
@@ -138,42 +136,7 @@ impl<'s> AssetCache<'s> {
                     Projection::scale(1.0, 0.5),
                     Projection::translate(11.5, 5.5),
                 ]),
-                biome_colors,
-                block_common_props: HashSet::from_iter(
-                    [
-                        "age",
-                        "axis",
-                        "berries",
-                        "bites",
-                        "down",
-                        "east",
-                        "eggs",
-                        "eye",
-                        "face",
-                        "facing",
-                        "flower_amount",
-                        "half",
-                        "hinge",
-                        "layers",
-                        "moisture",
-                        "north",
-                        "open",
-                        "orientation",
-                        "part",
-                        "pickles",
-                        "powered",
-                        "segment_amount",
-                        "shape",
-                        "snowy",
-                        "south",
-                        "type",
-                        "up",
-                        "waterlogged",
-                        "west",
-                    ]
-                    .into_iter()
-                    .map(String::from),
-                ),
+                settings,
             })
         }
     }
@@ -203,77 +166,15 @@ impl<'s> AssetCache<'s> {
     }
 
     pub fn get_asset(&self, block: &BlockRef) -> Option<Arc<Asset>> {
-        let info = AssetInfo::new(block.state.name.to_owned()).with_properties(
-            block.state.properties.iter().filter_map(|(k, v)| {
-                if self.block_common_props.contains(k) {
-                    Some((k.to_owned(), v.to_owned()))
-                } else {
-                    None
-                }
-            }),
-        );
+        let (rule, info) = self.settings.asset_rules.get(block);
 
-        match info.short_name() {
-            "air" => None,
-            "grass_block" => self
-                .get_or_create_asset(info.with_biome(block.biome.to_owned()), |info| {
-                    self.create_grass_block(info)
-                }),
-            "podzol" => self.get_or_create_asset(info, |info| {
-                self.create_solid_block_top_side(info, "_top", "_side")
-            }),
-            // TODO: "level" should factor in to water block rendering
-            "water" => self.get_or_create_asset(
-                info.with_biome(block.biome.to_owned()).with_property(
-                    "falling",
-                    block.state.get_property("falling").unwrap_or("false"),
-                ),
-                |info| self.create_water_block(info),
-            ),
-            // TODO: birch and spruce leaves have constant colours applied to them
-            "oak_leaves" | "jungle_leaves" | "acacia_leaves" | "dark_oak_leaves"
-            | "mangrove_leaves" => self
-                .get_or_create_asset(info.with_biome(block.biome.to_owned()), |info| {
-                    self.create_leaf_block(info)
-                }),
-            name @ "deepslate" | name if name.ends_with("_log") || name.ends_with("_stem") => self
-                .get_or_create_asset(info, |info| {
-                    self.create_solid_block_top_side(info, "_top", "")
-                }),
-            // Simple plant rendering, biome-unaware
-            "allium" | "azure_bluet" | "blue_orchid" | "cornflower" | "dandelion"
-            | "closed_eyeblossom" | "open_eyeblossom" | "lily_of_the_valley" | "oxeye_daisy"
-            | "poppy" | "torchflower" | "orange_tulip" | "pink_tulip" | "red_tulip"
-            | "white_tulip" | "wither_rose" | "lilac" | "peony" | "pitcher_plant" | "rose_bush"
-            | "sunflower" | "cactus_flower" | "dead_bush" | "short_dry_grass"
-            | "tall_dry_grass" | "hanging_roots" | "pale_hanging_moss" => {
-                self.get_or_create_asset(info, |info| self.create_plant_block(info, None))
-            }
-            b if b.ends_with("_sapling") => {
-                self.get_or_create_asset(info, |info| self.create_plant_block(info, None))
-            }
-            // Simple plant rendering, biome-aware (grass tint)
-            "bush" | "fern" | "large_fern" | "short_grass" | "tall_grass" | "sugar_cane" => self
-                .get_or_create_asset(info.with_biome(block.biome.to_owned()), |info| {
-                    self.create_plant_block(info, Some(&self.biome_colors.grass))
-                }),
-            "seagrass" => self.get_or_create_asset(info, |info| self.create_crop_block(info)),
-            _ => self.get_or_create_asset(info, |info| self.create_solid_block_uniform(info)),
-        }
-    }
-
-    fn get_or_create_asset<F>(&self, info: AssetInfo, f: F) -> Option<Arc<Asset>>
-    where
-        F: FnOnce(&AssetInfo) -> anyhow::Result<Option<Asset>>,
-    {
+        // TODO: RwLock instead?
         let mut assets = self.assets.lock().unwrap();
         if let Some(cached) = assets.get(&info) {
             return cached.clone();
         }
-        log::debug!("creating asset for {info}");
-        let span = tracing::span!(tracing::Level::INFO, "create_asset", key = %info);
-        let _enter = span.enter();
-        match f(&info) {
+
+        match self.create_asset(&info, &rule.render) {
             Ok(Some(asset)) => {
                 let asset = Some(Arc::new(asset));
                 assets.insert(info, asset.clone());
@@ -291,29 +192,101 @@ impl<'s> AssetCache<'s> {
         }
     }
 
-    /// Create an asset for a solid block with the same texture on each face.
-    fn create_solid_block_uniform(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
-        let texture = self.get_block_texture(info.short_name())?;
-        let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
-        Ok(Some(Asset { image: output }))
+    #[tracing::instrument(skip_all, fields(key = %info))]
+    fn create_asset(
+        &self,
+        info: &AssetInfo,
+        renderer: &AssetRenderSpec,
+    ) -> anyhow::Result<Option<Asset>> {
+        use AssetRenderSpec::*;
+
+        log::debug!("creating asset");
+        match &renderer {
+            Nothing => Ok(None),
+
+            SolidUniform { texture } => {
+                let texture_name = texture.apply(info);
+                let texture = self.get_block_texture(texture_name)?;
+                let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
+                Ok(Some(Asset { image: output }))
+            }
+
+            SolidTopSide {
+                top_texture,
+                side_texture,
+            } => {
+                let top_texture = self.get_block_texture(top_texture.apply(info))?;
+                let side_texture = self.get_block_texture(side_texture.apply(info))?;
+                self.create_solid_block_top_side(info, &top_texture, &side_texture)
+            }
+
+            Leaves {
+                texture,
+                tint_color,
+            } => {
+                let texture_name = texture.apply(info);
+                let mut texture = (*self.get_block_texture(texture_name)?).clone();
+                if let Some(actual_tint_color) = tint_color.apply(info, self.settings) {
+                    tint_in_place(&mut texture, actual_tint_color);
+                }
+                let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
+                Ok(Some(Asset { image: output }))
+            }
+
+            Plant {
+                texture,
+                tint_color,
+            } => {
+                let texture_name = texture.apply(info);
+                let mut texture = (*self.get_block_texture(texture_name)?).clone();
+                if let Some(actual_tint_color) = tint_color
+                    .as_ref()
+                    .and_then(|tc| tc.apply(info, self.settings))
+                {
+                    tint_in_place(&mut texture, actual_tint_color);
+                }
+                let output = self.render_plant(&texture);
+                Ok(Some(Asset { image: output }))
+            }
+
+            Crop { texture } => {
+                let texture_name = texture.apply(info);
+                let texture = self.get_block_texture(texture_name)?;
+                let output = self.render_crop(&texture);
+                Ok(Some(Asset { image: output }))
+            }
+
+            Grass { tint_color } => {
+                let actual_tint_color = tint_color
+                    .apply(info, self.settings)
+                    .unwrap_or(Rgb([255, 255, 255]));
+                self.create_grass_block(info, actual_tint_color)
+            }
+
+            Water { tint_color } => {
+                let actual_tint_color = tint_color
+                    .apply(info, self.settings)
+                    .unwrap_or(Rgb([255, 255, 255]));
+                self.create_water_block(info, actual_tint_color)
+            }
+
+            _ => unimplemented!(),
+        }
     }
 
     /// Create an asset for a solid block with a different top texture and same side textures.
     fn create_solid_block_top_side(
         &self,
         info: &AssetInfo,
-        top_suffix: &str,
-        side_suffix: &str,
+        top_texture: &RgbaImage,
+        side_texture: &RgbaImage,
     ) -> anyhow::Result<Option<Asset>> {
-        let name = info.short_name();
-        let top_texture = self.get_block_texture(format!("{name}{top_suffix}"))?;
-        let side_texture = self.get_block_texture(format!("{name}{side_suffix}"))?;
         let output = match info.get_property("axis") {
             None | Some("y") => {
                 self.render_solid_block(&top_texture, &side_texture, &side_texture, &TINT_BLOCK_3D)
             }
             Some("x") => {
-                let rotated_side_texture = image::imageops::rotate90(side_texture.as_ref());
+                let rotated_side_texture = image::imageops::rotate90(side_texture);
                 self.render_solid_block(
                     &rotated_side_texture,
                     &rotated_side_texture,
@@ -322,7 +295,7 @@ impl<'s> AssetCache<'s> {
                 )
             }
             Some("z") => {
-                let rotated_side_texture = image::imageops::rotate90(side_texture.as_ref());
+                let rotated_side_texture = image::imageops::rotate90(side_texture);
                 self.render_solid_block(
                     &side_texture,
                     &top_texture,
@@ -337,15 +310,11 @@ impl<'s> AssetCache<'s> {
         Ok(Some(Asset { image: output }))
     }
 
-    fn create_grass_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
-        let biome = info.short_biome();
-        let biome_tint = self.biome_colors.grass.get(biome);
-        log::debug!(
-            "got tint: biome={biome} tint=#{:X}{:X}{:X}",
-            biome_tint[0],
-            biome_tint[1],
-            biome_tint[2]
-        );
+    fn create_grass_block(
+        &self,
+        _info: &AssetInfo,
+        biome_tint: Rgb<u8>,
+    ) -> anyhow::Result<Option<Asset>> {
         let mut top = (*self.get_block_texture("grass_block_top")?).clone();
         tint_in_place(&mut top, biome_tint);
         let mut side_overlay = (*self.get_block_texture("grass_block_side_overlay")?).clone();
@@ -356,64 +325,20 @@ impl<'s> AssetCache<'s> {
         Ok(Some(Asset { image: output }))
     }
 
-    fn create_leaf_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
-        let biome = info.short_biome();
-        let biome_tint = self.biome_colors.foliage.get(biome);
-        log::debug!(
-            "got tint: biome={biome} tint=#{:X}{:X}{:X}",
-            biome_tint[0],
-            biome_tint[1],
-            biome_tint[2]
-        );
-        let mut texture = (*self.get_block_texture(info.short_name())?).clone();
-        tint_in_place(&mut texture, biome_tint);
-        let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
-        Ok(Some(Asset { image: output }))
-    }
-
-    fn create_water_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
-        let biome = info.short_biome();
-        let biome_tint = self.biome_colors.water.get(biome);
+    fn create_water_block(
+        &self,
+        info: &AssetInfo,
+        tint_color: Rgb<u8>,
+    ) -> anyhow::Result<Option<Asset>> {
         // let mut texture = (*self.get_block_texture("water_still")?).clone();
         let mut texture = RgbaImage::from_pixel(16, 16, Rgba([255, 255, 255, 120]));
-        tint_in_place(&mut texture, biome_tint);
+        tint_in_place(&mut texture, tint_color);
         let block_tints = if let Some("true") = info.get_property("falling") {
             &TINT_BLOCK_3D
         } else {
             &TINT_BLOCK_NONE
         };
         let output = self.render_solid_block(&texture, &texture, &texture, block_tints);
-        Ok(Some(Asset { image: output }))
-    }
-
-    fn create_plant_block(
-        &self,
-        info: &AssetInfo,
-        color_map: Option<&BiomeColorMap>,
-    ) -> anyhow::Result<Option<Asset>> {
-        let name = info.short_name();
-        let suffix = match info.get_property("half") {
-            Some("lower") => "_bottom",
-            Some("upper") => "_top",
-            Some(other) => {
-                return Err(anyhow!("unsupported plant 'half' property: {other}"));
-            }
-            None => "",
-        };
-        let mut texture = (*self.get_block_texture(format!("{name}{suffix}"))?).clone();
-        if let Some(color_map) = color_map {
-            let biome = info.short_biome();
-            let biome_tint = color_map.get(biome);
-            tint_in_place(&mut texture, biome_tint);
-        }
-        let output = self.render_plant(&texture);
-        Ok(Some(Asset { image: output }))
-    }
-
-    fn create_crop_block(&self, info: &AssetInfo) -> anyhow::Result<Option<Asset>> {
-        let name = info.short_name();
-        let texture = self.get_block_texture(name)?;
-        let output = self.render_crop(&texture);
         Ok(Some(Asset { image: output }))
     }
 
