@@ -281,7 +281,7 @@ impl Settings {
     }
 }
 
-const fn convert_rgb(raw: u32) -> Rgb<u8> {
+pub const fn convert_rgb(raw: u32) -> Rgb<u8> {
     Rgb([(raw >> 16) as u8, (raw >> 8) as u8, raw as u8])
 }
 

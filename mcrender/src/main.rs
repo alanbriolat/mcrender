@@ -5,14 +5,13 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use config::FileFormat;
 use image::imageops::FilterType;
-use image::{Rgba, RgbaImage};
-use imageproc::rect::Rect;
+use image::{Rgb, Rgba, RgbaImage};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::asset::AssetCache;
 use crate::render::{DirectoryRenderCache, Renderer};
-use crate::settings::Settings;
+use crate::settings::{Settings, convert_rgb};
 use crate::world::{BIndex, BlockRef, DimensionID, RCoords};
 
 mod asset;
@@ -38,6 +37,8 @@ struct Cli {
 enum Commands {
     AssetPreview {
         name: String,
+        /// Write image to specified file
+        target: PathBuf,
         /// Set a block state property
         #[arg(short, long, value_name = "PROP=VALUE")]
         prop: Vec<String>,
@@ -46,9 +47,9 @@ enum Commands {
         /// Rescale image before display/output
         #[arg(long, default_value_t = 8)]
         scale: u32,
-        /// Write image to specified file
-        #[arg(short, long)]
-        target: Option<PathBuf>,
+        /// Apply a solid background (to help with image bounds)
+        #[arg(long, value_parser = parse_rgb_u8)]
+        background: Option<Rgb<u8>>,
     },
     RenderTest {
         source: PathBuf,
@@ -56,6 +57,11 @@ enum Commands {
         #[arg(short, long)]
         cache_dir: Option<PathBuf>,
     },
+}
+
+fn parse_rgb_u8(s: &str) -> Result<Rgb<u8>, String> {
+    let value = u32::from_str_radix(s, 16).map_err(|err| err.to_string())?;
+    Ok(convert_rgb(value))
 }
 
 fn main() -> Result<()> {
@@ -82,6 +88,7 @@ fn main() -> Result<()> {
             prop,
             biome,
             scale,
+            background,
             target,
         } => {
             let mut asset_cache = AssetCache::new(cli.assets.clone(), &settings)?;
@@ -101,34 +108,22 @@ fn main() -> Result<()> {
             let asset = asset_cache
                 .get_asset(&block_ref)
                 .ok_or(anyhow!("no such asset"))?;
-            let image = image::imageops::resize(
+            let mut image = image::imageops::resize(
                 &asset.image,
                 asset.image.width() * scale,
                 asset.image.height() * scale,
                 FilterType::Nearest,
             );
-            if let Some(target) = target {
-                log::info!("writing asset to {:?}", target);
-                let mut output_file = File::create(target)?;
-                image.write_to(&mut output_file, image::ImageFormat::Png)?;
-            } else {
-                log::info!("displaying asset");
-                let mut display_image = RgbaImage::new(image.width(), image.height());
-                let box_rect =
-                    Rect::at(0, 0).of_size(display_image.width(), display_image.height());
-                imageproc::drawing::draw_filled_rect_mut(
-                    &mut display_image,
-                    box_rect,
-                    Rgba([20, 30, 40, 255]),
-                );
-                image::imageops::overlay(&mut display_image, &image, 0, 0);
-                imageproc::window::display_image(
-                    "asset-preview",
-                    &display_image,
-                    display_image.width(),
-                    display_image.width(),
-                );
+            if let Some(background) = background {
+                let background_rgba = Rgba([background[0], background[1], background[2], 255]);
+                let mut new_image =
+                    RgbaImage::from_pixel(image.width(), image.height(), background_rgba);
+                image::imageops::overlay(&mut new_image, &image, 0, 0);
+                image = new_image;
             }
+            log::info!("writing asset to {:?}", target);
+            let mut output_file = File::create(target)?;
+            image.write_to(&mut output_file, image::ImageFormat::Png)?;
         }
 
         Commands::RenderTest {
