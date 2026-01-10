@@ -42,6 +42,10 @@ render.type = "water"
 render.tint_color = { biome_lookup = "water" }
 properties = ["falling", "level"]
 
+[asset_rules.lava]
+render.type = "solid_uniform"
+render.texture = [ { literal = "lava_still" } ]
+
 [asset_rules.grass_block]
 names = ["grass_block"]
 render.type = "grass"
@@ -64,7 +68,7 @@ names = [
     "brown_bushroom", "red_mushroom",
     "crimson_fungus", "warped_fungus",
     # Other things that render the same way
-    "cactus_flower", "dead_bush", "short_dry_grass", "tall_dry_grass",
+    "cactus_flower", "dead_bush", "short_dry_grass", "tall_dry_grass", "firefly_bush",
     "hanging_roots", "pale_hanging_moss",
 ]
 render.type = "plant"
