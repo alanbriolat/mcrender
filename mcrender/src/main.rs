@@ -16,6 +16,7 @@ use crate::world::{BIndex, BlockRef, DimensionID, RCoords};
 
 mod asset;
 mod coords;
+mod proplist;
 mod render;
 mod settings;
 mod world;
