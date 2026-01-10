@@ -155,6 +155,13 @@ render.tint_color = { literal = 0x80A755 }
 render.type = "leaves"
 render.tint_color = { literal = 0x619961 }
 
+[asset_rules.vine]
+render.type = "vine"
+render.tint_color = { biome_lookup = "foliage" }
+
+[asset_rules.glow_lichen]
+render.type = "vine"
+
 
 # Minecraft biome tints for Java Edition, based on
 # https://minecraft.wiki/w/Block_colors (as of 2026-01-08).

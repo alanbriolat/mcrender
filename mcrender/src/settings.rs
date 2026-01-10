@@ -39,6 +39,9 @@ pub enum AssetRenderSpec {
     Grass {
         tint_color: TintColor,
     },
+    Vine {
+        tint_color: Option<TintColor>,
+    },
     Water {
         tint_color: TintColor,
     },
@@ -48,7 +51,8 @@ impl AssetRenderSpec {
     pub fn is_biome_aware(&self) -> bool {
         match self {
             // Optional tint_color
-            AssetRenderSpec::Plant { tint_color, .. } => tint_color
+            AssetRenderSpec::Plant { tint_color, .. }
+            | AssetRenderSpec::Vine { tint_color, .. } => tint_color
                 .as_ref()
                 .map(|c| c.is_biome_aware())
                 .unwrap_or(false),

@@ -96,6 +96,9 @@ pub struct AssetCache<'s> {
     projection_east: Projection,
     projection_south: Projection,
     projection_top: Projection,
+    projection_west: Projection,
+    projection_north: Projection,
+    projection_bottom: Projection,
     settings: &'s Settings,
 }
 
@@ -135,6 +138,23 @@ impl<'s> AssetCache<'s> {
                     Projection::scale(1.17, 1.17),
                     Projection::scale(1.0, 0.5),
                     Projection::translate(11.5, 5.5),
+                ]),
+                projection_west: flatten_projection([
+                    Projection::from_matrix([1., 0., 0., -0.5, 1., 0., 0., 0., 1.]).unwrap(),
+                    Projection::scale(12. / 16., 19. / 24.),
+                    Projection::translate(0., 5.),
+                ]),
+                projection_north: flatten_projection([
+                    Projection::from_matrix([1., 0., 0., 0.5, 1., 0., 0., 0., 1.]).unwrap(),
+                    Projection::scale(13. / 16., 19. / 24.),
+                    Projection::translate(11.5, -0.8),
+                ]),
+                projection_bottom: flatten_projection([
+                    Projection::translate(-8., -8.),
+                    Projection::rotate(45f32.to_radians()),
+                    Projection::scale(1.17, 1.17),
+                    Projection::scale(1.0, 0.5),
+                    Projection::translate(11.5, 17.5),
                 ]),
                 settings,
             })
@@ -263,6 +283,57 @@ impl<'s> AssetCache<'s> {
                 self.create_grass_block(info, actual_tint_color)
             }
 
+            Vine { tint_color } => {
+                let texture_name = info.short_name();
+                let mut texture = (*self.get_block_texture(texture_name)?).clone();
+                if let Some(actual_tint_color) = tint_color
+                    .as_ref()
+                    .and_then(|tc| tc.apply(info, self.settings))
+                {
+                    tint_in_place(&mut texture, actual_tint_color);
+                }
+                let top_texture = if let Some("true") = info.get_property("up") {
+                    Some(&texture)
+                } else {
+                    None
+                };
+                let south_texture = if let Some("true") = info.get_property("south") {
+                    Some(&texture)
+                } else {
+                    None
+                };
+                let east_texture = if let Some("true") = info.get_property("east") {
+                    Some(&texture)
+                } else {
+                    None
+                };
+                let bottom_texture = if let Some("true") = info.get_property("down") {
+                    Some(&texture)
+                } else {
+                    None
+                };
+                let north_texture = if let Some("true") = info.get_property("north") {
+                    Some(&texture)
+                } else {
+                    None
+                };
+                let west_texture = if let Some("true") = info.get_property("west") {
+                    Some(&texture)
+                } else {
+                    None
+                };
+                let output = self.render_transparent_block(
+                    top_texture,
+                    south_texture,
+                    east_texture,
+                    bottom_texture,
+                    north_texture,
+                    west_texture,
+                    &TINT_BLOCK_3D,
+                );
+                Ok(Some(Asset { image: output }))
+            }
+
             Water { tint_color } => {
                 let actual_tint_color = tint_color
                     .apply(info, self.settings)
@@ -360,6 +431,44 @@ impl<'s> AssetCache<'s> {
         output
     }
 
+    fn render_transparent_block(
+        &self,
+        top_texture: Option<&RgbaImage>,
+        south_texture: Option<&RgbaImage>,
+        east_texture: Option<&RgbaImage>,
+        bottom_texture: Option<&RgbaImage>,
+        north_texture: Option<&RgbaImage>,
+        west_texture: Option<&RgbaImage>,
+        tints: &SolidBlockTints,
+    ) -> RgbaImage {
+        let mut output = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+        if let Some(texture) = bottom_texture {
+            let projected = self.render_block_face(texture, Face::Bottom, tints.top);
+            overlay(&mut output, &projected, 0, 0);
+        }
+        if let Some(texture) = north_texture {
+            let projected = self.render_block_face(texture, Face::North, tints.south);
+            overlay(&mut output, &projected, 0, 0);
+        }
+        if let Some(texture) = west_texture {
+            let projected = self.render_block_face(texture, Face::West, tints.east);
+            overlay(&mut output, &projected, 0, 0);
+        }
+        if let Some(texture) = east_texture {
+            let projected = self.render_block_face(texture, Face::East, tints.east);
+            overlay(&mut output, &projected, 0, 0);
+        }
+        if let Some(texture) = south_texture {
+            let projected = self.render_block_face(texture, Face::South, tints.south);
+            overlay(&mut output, &projected, 0, 0);
+        }
+        if let Some(texture) = top_texture {
+            let projected = self.render_block_face(texture, Face::Top, tints.top);
+            overlay(&mut output, &projected, 0, 0);
+        }
+        output
+    }
+
     /// Project a 16x16 `texture` onto a face of a 24x24 isometric cube.
     fn render_block_face(
         &self,
@@ -372,6 +481,9 @@ impl<'s> AssetCache<'s> {
             Face::East => &self.projection_east,
             Face::South => &self.projection_south,
             Face::Top => &self.projection_top,
+            Face::West => &self.projection_west,
+            Face::North => &self.projection_north,
+            Face::Bottom => &self.projection_bottom,
             _ => unimplemented!(),
         };
         let mut buffer = RgbaImage::new(TILE_SIZE, TILE_SIZE);
