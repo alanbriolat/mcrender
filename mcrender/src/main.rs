@@ -98,7 +98,7 @@ fn main() -> Result<()> {
                 let Some((key, value)) = raw_prop.split_once("=") else {
                     return Err(anyhow!("invalid --prop argument: {:?}", raw_prop));
                 };
-                block_state = block_state.with_property(key.to_owned(), value.to_owned());
+                block_state = block_state.with_property(key, value);
             }
             let block_ref = BlockRef {
                 index: BIndex((0, 0, 0).into()),

@@ -602,13 +602,12 @@ mod tests {
 
     #[test]
     fn test_assetinfo() {
-        let info = AssetInfo::new("minecraft:birch_log".to_owned())
-            .with_property("axis".to_owned(), "z".to_owned());
+        let info = AssetInfo::new("minecraft:birch_log").with_property("axis", "z");
         assert_eq!(format!("{info}"), "_asset=minecraft:birch_log;axis=z");
-        let info = AssetInfo::new("minecraft:leaf_litter".to_owned())
-            .with_property("segment_amount".to_owned(), "3".to_owned())
-            .with_property("facing".to_owned(), "east".to_owned())
-            .with_biome("badlands".to_owned());
+        let info = AssetInfo::new("minecraft:leaf_litter")
+            .with_property("segment_amount", "3")
+            .with_property("facing", "east")
+            .with_biome("badlands");
         assert_eq!(
             format!("{info}"),
             "_asset=minecraft:leaf_litter;_biome=badlands;facing=east;segment_amount=3"

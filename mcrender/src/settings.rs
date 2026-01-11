@@ -174,11 +174,11 @@ pub struct AssetRules {
 
 impl AssetRules {
     pub fn get(&self, block: &BlockRef) -> (Arc<AssetRule>, AssetInfo) {
-        let mut info = AssetInfo::new(block.state.name.to_owned());
+        let mut info = AssetInfo::new(block.state.name.as_str());
         let rule = self.rules.get(info.short_name()).unwrap_or(&self.default);
         info = info.with_properties(block.state.properties.iter().filter_map(|(k, v)| {
             if self.default.properties.contains(k) || rule.properties.contains(k) {
-                Some((k.to_owned(), v.to_owned()))
+                Some((k, v))
             } else {
                 None
             }

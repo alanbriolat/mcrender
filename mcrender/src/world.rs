@@ -425,24 +425,22 @@ impl RawChunk {
                 .into(),
         );
 
-        for section_nbt in chunk_nbt.sections.iter() {
-            let block_palette = section_nbt
+        for section_nbt in chunk_nbt.sections.into_iter() {
+            let block_palette: Vec<BlockState> = section_nbt
                 .block_states
                 .palette
-                .iter()
+                .into_iter()
                 .map(|bs| BlockState {
-                    name: bs.name.clone().into_owned(),
+                    name: bs.name.into_owned(),
                     properties: bs
                         .properties
-                        .as_ref()
-                        .map(|props| PropList::from(props))
                         .unwrap_or_else(|| PropList::with_capacity(0, 0)),
                 })
                 .collect();
-            let block_indices = match section_nbt.block_states.data.as_ref() {
+            let block_indices = match section_nbt.block_states.data {
                 None => Vec::from([0u16; SECTION_BLOCK_COUNT]),
                 Some(data) => {
-                    let palette_count = section_nbt.block_states.palette.len() as u64;
+                    let palette_count = block_palette.len() as u64;
                     let bits = max(4, u64::BITS - (palette_count - 1).leading_zeros()) as usize;
                     let packing = u64::BITS as usize / bits;
                     let mask = (1u64 << bits) - 1;
@@ -460,16 +458,16 @@ impl RawChunk {
                         .collect()
                 }
             };
-            let biome_palette = section_nbt
+            let biome_palette: Vec<String> = section_nbt
                 .biomes
                 .palette
-                .iter()
-                .map(|biome| biome.clone().into_owned())
+                .into_iter()
+                .map(|biome| biome.into_owned())
                 .collect();
-            let biome_indices = match section_nbt.biomes.data.as_ref() {
+            let biome_indices = match section_nbt.biomes.data {
                 None => Vec::from([0u8; SECTION_BIOME_COUNT]),
                 Some(data) => {
-                    let palette_count = section_nbt.biomes.palette.len() as u64;
+                    let palette_count = biome_palette.len() as u64;
                     let bits = (u64::BITS - (palette_count - 1).leading_zeros()) as usize;
                     let packing = u64::BITS as usize / bits;
                     let mask = (1u64 << bits) - 1;
@@ -551,7 +549,7 @@ mod nbt {
         #[serde(borrow)]
         pub name: Cow<'a, str>,
         #[serde(rename = "Properties")]
-        pub properties: Option<HashMap<Cow<'a, str>, Cow<'a, str>>>,
+        pub properties: Option<PropList>,
     }
 
     #[derive(Deserialize, derive_more::Debug)]
