@@ -1,9 +1,13 @@
+use bytes::BytesMut;
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Formatter;
 use std::hash::Hash;
-
-use bytes::BytesMut;
+use std::marker::PhantomData;
 
 struct BytesPool {
     // Heap-allocated buffer for new data
@@ -406,6 +410,48 @@ impl std::fmt::Display for PropList {
             }
             Ok(())
         }
+    }
+}
+
+struct PropListVisitor {
+    marker: PhantomData<fn() -> PropList>,
+}
+
+impl PropListVisitor {
+    fn new() -> Self {
+        Self {
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<'de> Visitor<'de> for PropListVisitor {
+    type Value = PropList;
+
+    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        formatter.write_str("a string -> string map")
+    }
+
+    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let item_cap = access.size_hint().unwrap_or(8);
+        let data_cap = item_cap * 8;
+        let mut new = PropList::with_capacity(data_cap, item_cap);
+        while let Some((key, value)) = access.next_entry()? {
+            new.insert(key, value);
+        }
+        Ok(new)
+    }
+}
+
+impl<'de> Deserialize<'de> for PropList {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(PropListVisitor::new())
     }
 }
 
