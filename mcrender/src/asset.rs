@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -8,6 +8,7 @@ use image::imageops::overlay;
 use image::{GenericImageView, Rgb, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
+use crate::proplist::PropList;
 use crate::settings::{AssetRenderSpec, Settings};
 use crate::world::BlockRef;
 
@@ -24,46 +25,50 @@ pub enum Face {
     Top,
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, derive_more::Deref, derive_more::DerefMut)]
-pub struct AssetInfo(BTreeMap<String, String>);
+#[derive(
+    Clone, Eq, PartialEq, Hash, Ord, PartialOrd, derive_more::Deref, derive_more::DerefMut,
+)]
+pub struct AssetInfo(PropList);
 
 const PROP_NAME: &str = "_asset";
 const PROP_BIOME: &str = "_biome";
 pub const DEFAULT_BIOME: &str = "minecraft:plains";
 
 impl AssetInfo {
-    pub fn new<V: Into<String>>(name: V) -> Self {
-        AssetInfo(BTreeMap::new()).with_property(PROP_NAME.to_owned(), name.into())
+    pub fn new<V: AsRef<str>>(name: V) -> Self {
+        Self(PropList::new()).with_property(PROP_NAME, name)
     }
 
-    pub fn with_property<K: Into<String>, V: Into<String>>(mut self, k: K, v: V) -> Self {
-        self.insert(k.into(), v.into());
+    pub fn with_property<K: AsRef<str>, V: AsRef<str>>(mut self, k: K, v: V) -> Self {
+        self.insert(k.as_ref(), v.as_ref());
         self
     }
 
-    pub fn with_properties<K: Into<String>, V: Into<String>>(
+    pub fn with_properties<K: AsRef<str>, V: AsRef<str>>(
         mut self,
         iter: impl IntoIterator<Item = (K, V)>,
     ) -> Self {
-        self.extend(iter.into_iter().map(|(k, v)| (k.into(), v.into())));
+        for (k, v) in iter.into_iter() {
+            self.insert(k.as_ref(), v.as_ref());
+        }
         self
     }
 
-    pub fn with_biome<V: Into<String>>(mut self, v: V) -> Self {
-        self.insert(PROP_BIOME.to_owned(), v.into());
+    pub fn with_biome<V: AsRef<str>>(mut self, v: V) -> Self {
+        self.insert(PROP_BIOME, v.as_ref());
         self
     }
 
     pub fn get_property<K: AsRef<str>>(&self, k: K) -> Option<&str> {
-        self.get(k.as_ref()).map(|v| v.as_str())
+        self.get(k.as_ref())
     }
 
     pub fn short_name(&self) -> &str {
-        let name = &self[PROP_NAME];
+        let name = self.get(PROP_NAME).unwrap();
         if let Some((_left, right)) = name.split_once(":") {
             right
         } else {
-            name.as_str()
+            name
         }
     }
 

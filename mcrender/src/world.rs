@@ -20,6 +20,7 @@ use derivative::Derivative; // TODO: replace with derive_more::Debug
 use serde::Deserialize;
 
 use crate::coords::{CoordsXZ, CoordsXZY, IndexXZ, IndexXZY};
+use crate::proplist::PropList;
 
 const SECTOR_SIZE: usize = 4096;
 pub const REGION_SIZE: u32 = 32;
@@ -433,10 +434,9 @@ impl RawChunk {
                     name: bs.name.clone().into_owned(),
                     properties: bs
                         .properties
-                        .iter()
-                        .flatten()
-                        .map(|(k, v)| (k.clone().into_owned(), v.clone().into_owned()))
-                        .collect(),
+                        .as_ref()
+                        .map(|props| PropList::from(props))
+                        .unwrap_or_else(|| PropList::with_capacity(0, 0)),
                 })
                 .collect();
             let block_indices = match section_nbt.block_states.data.as_ref() {
@@ -616,25 +616,26 @@ impl Section {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct BlockState {
+    // TODO: this should just be a well-known property instead?
     pub name: String,
-    pub properties: BTreeMap<String, String>,
+    pub properties: PropList,
 }
 
 impl BlockState {
     pub fn new(name: String) -> BlockState {
         BlockState {
             name,
-            properties: BTreeMap::new(),
+            properties: PropList::new(),
         }
     }
 
-    pub fn with_property(mut self, key: String, value: String) -> Self {
-        self.properties.insert(key, value);
+    pub fn with_property<K: AsRef<str>, V: AsRef<str>>(mut self, key: K, value: V) -> Self {
+        self.properties.insert(key.as_ref(), value.as_ref());
         self
     }
 
     pub fn get_property(&self, key: &str) -> Option<&str> {
-        self.properties.get(key).map(|v| v.as_str())
+        self.properties.get(key)
     }
 }
 
