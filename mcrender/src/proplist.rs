@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 
 use bytes::BytesMut;
@@ -141,15 +143,48 @@ pub struct PropList {
 }
 
 impl PropList {
-    pub fn new() -> PropList {
+    pub fn new() -> Self {
         Self::with_capacity(64, 8)
     }
 
-    pub fn with_capacity(data_cap: usize, item_cap: usize) -> PropList {
+    pub fn with_capacity(data_cap: usize, item_cap: usize) -> Self {
         Self {
             pool: BytesPool::with_capacity(data_cap),
             items: Vec::with_capacity(item_cap),
         }
+    }
+
+    pub fn from_iter<I, K, V>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let mut new = Self::new();
+        for (key, value) in iter.into_iter() {
+            new.insert(key.as_ref(), value.as_ref());
+        }
+        new
+    }
+
+    /// Create new `PropList` from an iterator known to have no duplicates, with a known required
+    /// data size, and optionally already sorted (e.g. from `BTreeMap::items()`).
+    fn from_iter_unchecked<I, K, V>(iter: I, data_cap: usize, item_cap: usize, sorted: bool) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let mut new = Self::with_capacity(data_cap, item_cap);
+        for (key, value) in iter.into_iter() {
+            let key = new.pool.append(key.as_ref().as_bytes());
+            let value = new.pool.append(value.as_ref().as_bytes());
+            new.items.push(Item { key, value });
+        }
+        if !sorted {
+            new.items.sort_by(|item, other| item.key().cmp(other.key()));
+        }
+        new
     }
 
     /// Checks if the `PropList` contains `key` with `value`. Convenience method.
@@ -275,6 +310,47 @@ impl Clone for PropList {
             items.push(Item { key, value });
         }
         Self { pool, items }
+    }
+}
+
+impl<K: AsRef<str>, V: AsRef<str>> From<&HashMap<K, V>> for PropList {
+    fn from(other: &HashMap<K, V>) -> Self {
+        let data_cap: usize = other
+            .iter()
+            .map(|(k, v)| k.as_ref().len() + v.as_ref().len())
+            .sum();
+        let item_cap = other.len();
+        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, false)
+    }
+}
+
+impl From<&BTreeMap<String, String>> for PropList {
+    fn from(other: &BTreeMap<String, String>) -> Self {
+        let data_cap: usize = other.iter().map(|(k, v)| k.len() + v.len()).sum();
+        let item_cap = other.len();
+        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, true)
+    }
+}
+
+impl<'a> From<&BTreeMap<&'a str, &'a str>> for PropList {
+    fn from(other: &BTreeMap<&'a str, &'a str>) -> Self {
+        let data_cap: usize = other.iter().map(|(k, v)| k.len() + v.len()).sum();
+        let item_cap = other.len();
+        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, true)
+    }
+}
+
+impl<'a> From<&BTreeMap<Cow<'a, str>, Cow<'a, str>>> for PropList {
+    fn from(other: &BTreeMap<Cow<'a, str>, Cow<'a, str>>) -> Self {
+        let data_cap: usize = other.iter().map(|(k, v)| k.len() + v.len()).sum();
+        let item_cap = other.len();
+        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, true)
+    }
+}
+
+impl<K: AsRef<str>, V: AsRef<str>> FromIterator<(K, V)> for PropList {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        Self::from_iter(iter)
     }
 }
 
