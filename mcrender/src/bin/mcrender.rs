@@ -9,17 +9,10 @@ use image::{Rgb, Rgba, RgbaImage};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
-use crate::asset::AssetCache;
-use crate::render::{DirectoryRenderCache, Renderer};
-use crate::settings::{Settings, convert_rgb};
-use crate::world::{BIndex, BlockRef, DimensionID, RCoords};
-
-mod asset;
-mod coords;
-mod proplist;
-mod render;
-mod settings;
-mod world;
+use mcrender::asset::AssetCache;
+use mcrender::render::{DirectoryRenderCache, Renderer};
+use mcrender::settings::{Settings, convert_rgb};
+use mcrender::world::{BIndex, BlockRef, DimensionID, RCoords};
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
@@ -43,7 +36,7 @@ enum Commands {
         /// Set a block state property
         #[arg(short, long, value_name = "PROP=VALUE")]
         prop: Vec<String>,
-        #[arg(long, default_value = crate::asset::DEFAULT_BIOME)]
+        #[arg(long, default_value = mcrender::asset::DEFAULT_BIOME)]
         biome: String,
         /// Rescale image before display/output
         #[arg(long, default_value_t = 8)]
@@ -93,7 +86,7 @@ fn main() -> Result<()> {
             target,
         } => {
             let mut asset_cache = AssetCache::new(cli.assets.clone(), &settings)?;
-            let mut block_state = world::BlockState::new(name.into());
+            let mut block_state = mcrender::world::BlockState::new(name.into());
             for raw_prop in prop.iter() {
                 let Some((key, value)) = raw_prop.split_once("=") else {
                     return Err(anyhow!("invalid --prop argument: {:?}", raw_prop));
@@ -133,7 +126,7 @@ fn main() -> Result<()> {
             cache_dir,
         } => {
             let asset_cache = AssetCache::new(cli.assets, &settings)?;
-            let world_info = world::WorldInfo::try_from_path(source.clone())?;
+            let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
