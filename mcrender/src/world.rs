@@ -20,7 +20,7 @@ use derivative::Derivative; // TODO: replace with derive_more::Debug
 use serde::Deserialize;
 
 use crate::coords::{CoordsXZ, CoordsXZY, IndexXZ, IndexXZY};
-use crate::proplist::PropList;
+use crate::proplist::DefaultPropList as PropList;
 
 const SECTOR_SIZE: usize = 4096;
 pub const REGION_SIZE: u32 = 32;
@@ -432,9 +432,7 @@ impl RawChunk {
                 .into_iter()
                 .map(|bs| BlockState {
                     name: bs.name.into_owned(),
-                    properties: bs
-                        .properties
-                        .unwrap_or_else(|| PropList::with_capacity(0, 0)),
+                    properties: bs.properties.unwrap_or_else(|| PropList::new()),
                 })
                 .collect();
             let block_indices = match section_nbt.block_states.data {

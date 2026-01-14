@@ -2,193 +2,268 @@ use bytes::BytesMut;
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use std::borrow::Cow;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
-use std::fmt::Formatter;
+use std::cmp::{Ordering, max};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
-struct BytesPool {
-    // Heap-allocated buffer for new data
-    unallocated: BytesMut,
-    // How many bytes have been allocated to buffer slices
-    allocated: usize,
-    // How many bytes of the buffer slices are in use
-    used: usize,
-    // Buffer slices that can be re-used, sorted by capacity
-    free: Vec<BytesMut>,
-}
+struct Pool(Option<BytesMut>);
 
-impl BytesPool {
-    fn with_capacity(cap: usize) -> Self {
-        Self {
-            unallocated: BytesMut::with_capacity(cap),
-            allocated: 0,
-            used: 0,
-            free: Vec::new(),
+impl Pool {
+    #[inline]
+    fn new() -> Self {
+        Self(None)
+    }
+
+    #[inline]
+    fn with_capacity(capacity: usize) -> Self {
+        Self(Some(BytesMut::with_capacity(capacity)))
+    }
+
+    #[inline]
+    fn store<'d, I: IntoIterator<Item = &'d [u8]>>(
+        &mut self,
+        iter: I,
+        size_hint: Option<usize>,
+    ) -> BytesMut {
+        let unallocated = self.0.get_or_insert_with(|| {
+            BytesMut::with_capacity(max(DEFAULT_POOL_SIZE, size_hint.unwrap_or(0)))
+        });
+        for data in iter.into_iter() {
+            unallocated.extend_from_slice(data);
         }
-    }
-
-    /// Store `data` into the buffer, either by re-using a free buffer slice or creating a new one.
-    fn store(&mut self, data: &[u8]) -> BytesMut {
-        // Try to find the first free buffer slice that's large enough to hold the data
-        let maybe_i = self
-            .free
-            .iter()
-            .enumerate()
-            .find_map(|(i, free)| (free.capacity() >= data.len()).then_some(i));
-        if let Some(i) = maybe_i {
-            // If we can reuse a buffer, take it, fill it and remove it
-            let mut buf = self.free.remove(i);
-            buf.extend_from_slice(data);
-            self.used += data.len();
-            buf
-        } else {
-            // Otherwise, allocate the data into a new buffer
-            self.append(data)
-        }
-    }
-
-    /// Store `data` by allocating a new slice of the buffer.
-    fn append(&mut self, data: &[u8]) -> BytesMut {
-        self.unallocated.extend_from_slice(data);
-        self.allocated += data.len();
-        self.used += data.len();
-        self.unallocated.split_to(data.len())
-    }
-
-    /// Store `data` in `existing`. If `existing` is too small, it will be added to the free-list
-    /// and a new buffer slice will be allocated in its place.
-    fn reuse_or_store(&mut self, data: &[u8], existing: &mut BytesMut) {
-        if existing.capacity() >= data.len() {
-            // If the existing buffer is large enough, reuse it
-            self.used -= existing.len();
-            existing.truncate(0);
-            existing.extend_from_slice(data);
-            self.used += data.len();
-        } else {
-            // Otherwise, allocate to a new buffer ...
-            let mut buf = self.store(data);
-            // ... return the new buffer in-place ...
-            std::mem::swap(&mut buf, existing);
-            // ... and keep the old buffer for later re-use
-            self.free(buf);
-        }
-    }
-
-    /// Add `buf` to the free list.
-    fn free(&mut self, mut buf: BytesMut) {
-        self.used -= buf.len();
-        buf.truncate(0);
-        // Keep free-list ordered by capacity
-        match self
-            .free
-            .binary_search_by_key(&buf.capacity(), |free| free.capacity())
-        {
-            Ok(i) => self.free.insert(i, buf),
-            Err(i) => self.free.insert(i, buf),
-        }
-    }
-
-    /// Add each of `bufs` to the free list. Only sorts the free-list once, compared to repeated
-    /// calls to `free()`.
-    fn free_many(&mut self, bufs: impl IntoIterator<Item = BytesMut>) {
-        self.free.extend(bufs.into_iter().map(|mut buf| {
-            self.used -= buf.len();
-            buf.truncate(0);
-            buf
-        }));
-        self.free.sort_by_key(|buf| buf.capacity());
-    }
-
-    /// Try to reclaim the entire buffer as unallocated space, on the assumption that all references
-    /// to the buffer have been dropped.
-    fn try_reclaim(&mut self) -> bool {
-        self.free.truncate(0);
-        let expected_capacity = self.allocated + self.unallocated.capacity();
-        if self.unallocated.try_reclaim(expected_capacity) {
-            self.allocated = 0;
-            self.used = 0;
-            true
-        } else {
-            false
-        }
+        unallocated.split()
     }
 }
 
-#[derive(Eq, PartialEq)]
-struct Item {
-    key: BytesMut,
-    value: BytesMut,
+enum Item<const N: usize> {
+    Inline { buf: [u8; N], key_len: u8, len: u8 },
+    Allocated { buf: BytesMut, key_len: u32 },
 }
 
-impl Item {
+impl<const N: usize> Item<N> {
+    /// Create a new `Item` from `key` and `value`, allocating to `pool` if too large to store inline.
+    #[inline]
+    fn new(key: &str, value: &str, pool: &mut Pool) -> Item<N> {
+        Self::try_new_inline(key, value).unwrap_or_else(|| Self::new_allocated(key, value, pool))
+    }
+
+    /// Attempt to create a new `Item` from `key` and `value` without allocating.
+    #[inline]
+    fn try_new_inline(key: &str, value: &str) -> Option<Item<N>> {
+        if key.len() + value.len() <= N {
+            let key_len = key.len();
+            let len = key_len + value.len();
+            let mut buf = [0u8; N];
+            buf[..key_len].copy_from_slice(key.as_bytes());
+            buf[key_len..len].copy_from_slice(value.as_bytes());
+            Some(Self::Inline {
+                buf,
+                key_len: key_len as u8,
+                len: len as u8,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Create a new `Item` from `key` and `value` by allocating to `pool`.
+    #[inline]
+    fn new_allocated(key: &str, value: &str, pool: &mut Pool) -> Item<N> {
+        let key_len = key.len();
+        let len = key_len + value.len();
+        let buf = pool.store([key.as_bytes(), value.as_bytes()], Some(len));
+        Self::Allocated {
+            buf,
+            key_len: key_len as u32,
+        }
+    }
+
+    /// Create a copy of this `Item`, allocating to `pool` if it's too large to store inline.
+    #[inline]
+    fn clone(&self, pool: &mut Pool) -> Item<N> {
+        self.try_clone_inline()
+            .unwrap_or_else(|| self.clone_allocated(pool))
+    }
+
+    /// Attempt to create a copy of this `Item` without allocating.
+    #[inline]
+    fn try_clone_inline(&self) -> Option<Item<N>> {
+        match self {
+            Self::Inline { buf, key_len, len } => {
+                // Previously Inline: just clone it
+                Some(Self::Inline {
+                    buf: buf.clone(),
+                    key_len: *key_len,
+                    len: *len,
+                })
+            }
+            Self::Allocated { buf, key_len } => {
+                // Previously Allocated: copy to inline if small enough
+                if buf.len() > N {
+                    None
+                } else {
+                    let mut new_buf = [0u8; N];
+                    new_buf[..buf.len()].copy_from_slice(buf);
+                    Some(Self::Inline {
+                        buf: new_buf,
+                        key_len: *key_len as u8,
+                        len: buf.len() as u8,
+                    })
+                }
+            }
+        }
+    }
+
+    /// Create a copy of this `Item` by allocating to `pool`.
+    #[inline]
+    fn clone_allocated(&self, pool: &mut Pool) -> Item<N> {
+        let (split, buf) = self.get_split_and_buffer();
+        let buf = pool.store([buf], Some(buf.len()));
+        Self::Allocated {
+            buf,
+            key_len: split as u32,
+        }
+    }
+
+    /// Get the `(key, value)` strings. This is faster than `.key()` and `.value()` if both are needed.
+    #[inline]
+    fn key_value(&self) -> (&str, &str) {
+        let (split, buf) = self.get_split_and_buffer();
+        unsafe {
+            // SAFETY: buffer is only ever populated from &str or copied
+            (
+                str::from_utf8_unchecked(&buf[..split]),
+                str::from_utf8_unchecked(&buf[split..]),
+            )
+        }
+    }
+
+    #[inline]
     fn key(&self) -> &str {
-        // Safety is provided by the caller only ever storing &str into the buffer.
-        unsafe { str::from_utf8_unchecked(&self.key) }
+        self.key_value().0
     }
 
+    #[inline]
     fn value(&self) -> &str {
-        // Safety is provided by the caller only ever storing &str into the buffer.
-        unsafe { str::from_utf8_unchecked(&self.value) }
+        self.key_value().1
+    }
+
+    /// Attempt to update the `value` of this `Item` in-place, if the new value will fit in the existing
+    /// buffer (whether inline or allocated). Returns `true` if the update was performed, otherwise
+    /// no changes will have been made.
+    fn try_update(&mut self, value: &str) -> bool {
+        match self {
+            Self::Inline { buf, key_len, len } => {
+                let key_len = *key_len as usize;
+                let new_len = key_len + value.len();
+                if new_len <= N {
+                    buf[key_len..new_len].copy_from_slice(value.as_bytes());
+                    *len = new_len as u8;
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::Allocated { buf, key_len } => {
+                let key_len = *key_len as usize;
+                let new_len = key_len + value.len();
+                if new_len <= buf.capacity() {
+                    buf.truncate(key_len);
+                    buf.extend_from_slice(value.as_bytes());
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Read helper that gets the occupied buffer slice and the split point between key and value.
+    #[inline]
+    fn get_split_and_buffer(&self) -> (usize, &[u8]) {
+        match self {
+            Self::Inline { buf, key_len, len } => (*key_len as usize, &buf[..*len as usize]),
+            Self::Allocated { buf, key_len } => (*key_len as usize, buf),
+        }
+    }
+
+    /// How many bytes would need to be allocated to clone this `Item`? Zero if not allocated or if
+    /// otherwise small enough to fit inline.
+    #[inline]
+    fn clone_alloc_bytes_required(&self) -> usize {
+        match self {
+            Self::Inline { .. } => 0,
+            Self::Allocated { buf, .. } => {
+                if buf.len() <= N {
+                    0
+                } else {
+                    buf.len()
+                }
+            }
+        }
     }
 }
+
+impl<const N: usize> PartialEq for Item<N> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.get_split_and_buffer()
+            .eq(&other.get_split_and_buffer())
+    }
+}
+
+impl<const N: usize> Eq for Item<N> {}
+
+impl<const N: usize> Hash for Item<N> {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let (buf, key_len, len) = match self {
+            Self::Inline { buf, key_len, len } => (buf.as_ref(), *key_len as usize, *len as usize),
+            Self::Allocated { buf, key_len } => (buf.as_ref(), *key_len as usize, buf.len()),
+        };
+        // Inline exactly what `impl Hash for str` does via the experimental `Hasher::write_str()`
+        state.write(&buf[..key_len]);
+        state.write_u8(0xFF);
+        state.write(&buf[key_len..len]);
+        state.write_u8(0xFF);
+    }
+}
+
+/// Minimum allocation when an `Item` needs to be allocated for the first time.
+const DEFAULT_POOL_SIZE: usize = 64;
+
+/// The maximum number of bytes that can be stored in Item::Inline without making it larger than
+/// Item::Allocated, based on reading and experimentation related to enum layouts and BytesMut. It's
+/// essentially free to always use at least this much inline capacity.
+pub const DEFAULT_INLINE_CAPACITY: usize = 37;
+
+/// Sensible default `PropList` parametrization.
+pub type DefaultPropList = PropList<DEFAULT_INLINE_CAPACITY>;
 
 /// An ordered string map that minimizes memory allocations, compared to `BTreeMap<String, String>`.
 ///
 /// Allows updates and removals, but optimized for append-only operations.
-///
-/// Internally uses a single `BytesMut` buffer to store keys and values, with a free-list to re-use
-/// buffer slices.
-pub struct PropList {
-    pool: BytesPool,
-    items: Vec<Item>,
+pub struct PropList<const N: usize> {
+    pool: Pool,
+    items: Vec<Item<N>>,
 }
 
-impl PropList {
+impl<const N: usize> PropList<N> {
     pub fn new() -> Self {
-        Self::with_capacity(64, 8)
+        Self::with_capacity(0)
     }
 
-    pub fn with_capacity(data_cap: usize, item_cap: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
+        debug_assert!(N < 256, "Item<N> too big for u8 length");
         Self {
-            pool: BytesPool::with_capacity(data_cap),
-            items: Vec::with_capacity(item_cap),
+            pool: Pool(None),
+            items: Vec::with_capacity(capacity),
         }
     }
 
-    pub fn from_iter<I, K, V>(iter: I) -> Self
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str>,
-        V: AsRef<str>,
-    {
-        let mut new = Self::new();
-        for (key, value) in iter.into_iter() {
-            new.insert(key.as_ref(), value.as_ref());
-        }
-        new
-    }
-
-    /// Create new `PropList` from an iterator known to have no duplicates, with a known required
-    /// data size, and optionally already sorted (e.g. from `BTreeMap::items()`).
-    fn from_iter_unchecked<I, K, V>(iter: I, data_cap: usize, item_cap: usize, sorted: bool) -> Self
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str>,
-        V: AsRef<str>,
-    {
-        let mut new = Self::with_capacity(data_cap, item_cap);
-        for (key, value) in iter.into_iter() {
-            let key = new.pool.append(key.as_ref().as_bytes());
-            let value = new.pool.append(value.as_ref().as_bytes());
-            new.items.push(Item { key, value });
-        }
-        if !sorted {
-            new.items.sort_by(|item, other| item.key().cmp(other.key()));
-        }
-        new
+    /// Ensure enough space for `additional` items without re-allocating.
+    pub fn reserve(&mut self, additional: usize) {
+        self.items.reserve(additional);
     }
 
     /// Checks if the `PropList` contains `key` with `value`. Convenience method.
@@ -200,10 +275,8 @@ impl PropList {
 
     // Standard HashMap-like methods
 
-    fn clear(&mut self) {
-        self.pool
-            .free_many(self.items.drain(..).flat_map(|item| [item.key, item.value]));
-        assert!(self.pool.try_reclaim());
+    pub fn clear(&mut self) {
+        self.items.clear();
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
@@ -219,8 +292,7 @@ impl PropList {
     }
 
     pub fn get_key_value(&self, key: &str) -> Option<(&str, &str)> {
-        self.get_item(key)
-            .map(|(_i, item)| (item.key(), item.value()))
+        self.get_item(key).map(|(_i, item)| item.key_value())
     }
 
     // pub fn get_mut(...)
@@ -229,18 +301,17 @@ impl PropList {
         match self.get_item_index(key) {
             Ok(i) => {
                 // Existing item, update it, in-place if possible
-                let mut item = &mut self.items[i];
-                self.pool.reuse_or_store(value.as_bytes(), &mut item.value);
+                let existing = &mut self.items[i];
+                if !existing.try_update(value) {
+                    // If it wasn't updated, then we need to allocate (because there's no reason to
+                    // have previously allocated a buffer smaller than what could be inlined)
+                    *existing = Item::new_allocated(key, value, &mut self.pool);
+                }
             }
             Err(i) => {
                 // No existing item, insert a new one, in the correct position
-                self.items.insert(
-                    i,
-                    Item {
-                        key: self.pool.store(key.as_bytes()),
-                        value: self.pool.store(value.as_bytes()),
-                    },
-                );
+                let item = Item::new(key, value, &mut self.pool);
+                self.items.insert(i, item);
             }
         }
         self
@@ -254,7 +325,7 @@ impl PropList {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.items.iter().map(|item| (item.key(), item.value()))
+        self.items.iter().map(|item| item.key_value())
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {
@@ -268,9 +339,7 @@ impl PropList {
     pub fn remove(&mut self, key: &str) -> bool {
         match self.get_item_index(key) {
             Ok(i) => {
-                let Item { key, value } = self.items.remove(i);
-                self.pool.free(key);
-                self.pool.free(value);
+                self.items.remove(i);
                 true
             }
             Err(_) => false,
@@ -278,7 +347,16 @@ impl PropList {
     }
 
     // pub fn remove_entry(...)
-    // pub fn retain(...)
+
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&str, &str) -> bool,
+    {
+        self.items.retain(|item| {
+            let (k, v) = item.key_value();
+            f(k, v)
+        });
+    }
 
     pub fn values(&self) -> impl Iterator<Item = &str> {
         self.items.iter().map(|item| item.value())
@@ -293,131 +371,109 @@ impl PropList {
         self.items.binary_search_by(|item| item.key().cmp(key))
     }
 
-    fn get_item(&self, key: &str) -> Option<(usize, &Item)> {
+    #[inline]
+    fn get_item(&self, key: &str) -> Option<(usize, &Item<N>)> {
         self.get_item_index(key).ok().map(|i| (i, &self.items[i]))
-    }
-
-    fn get_item_mut(&mut self, key: &str) -> Option<(usize, &mut Item)> {
-        self.get_item_index(key)
-            .ok()
-            .map(|i| (i, &mut self.items[i]))
     }
 }
 
-impl Clone for PropList {
+impl<const N: usize> Clone for PropList<N> {
     fn clone(&self) -> Self {
-        let mut pool = BytesPool::with_capacity(self.pool.used);
+        // Find out how much is needed in Allocated items, because we might be able to fast path
+        let alloc_bytes = self
+            .items
+            .iter()
+            .map(|item| item.clone_alloc_bytes_required())
+            .sum();
+
+        // Pre-allocate the pool if necessary
+        let mut pool = if alloc_bytes > 0 {
+            Pool::with_capacity(alloc_bytes)
+        } else {
+            Pool::new()
+        };
+
+        // Clone the items
         let mut items = Vec::with_capacity(self.items.len());
-        for item in self.items.iter() {
-            let key = pool.append(item.key.as_ref());
-            let value = pool.append(item.value.as_ref());
-            items.push(Item { key, value });
-        }
+        items.extend(self.items.iter().map(|item| item.clone(&mut pool)));
+
         Self { pool, items }
     }
 }
 
-impl<K: AsRef<str>, V: AsRef<str>> From<&HashMap<K, V>> for PropList {
-    fn from(other: &HashMap<K, V>) -> Self {
-        let data_cap: usize = other
-            .iter()
-            .map(|(k, v)| k.as_ref().len() + v.as_ref().len())
-            .sum();
-        let item_cap = other.len();
-        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, false)
+impl<K: AsRef<str>, V: AsRef<str>, const N: usize> FromIterator<(K, V)> for PropList<N> {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(into_iter: I) -> Self {
+        let iter = into_iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let mut new = Self::with_capacity(upper.unwrap_or(lower));
+        for (key, value) in iter.into_iter() {
+            new.insert(key.as_ref(), value.as_ref());
+        }
+        new
     }
 }
 
-impl From<&BTreeMap<String, String>> for PropList {
-    fn from(other: &BTreeMap<String, String>) -> Self {
-        let data_cap: usize = other.iter().map(|(k, v)| k.len() + v.len()).sum();
-        let item_cap = other.len();
-        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, true)
-    }
-}
-
-impl<'a> From<&BTreeMap<&'a str, &'a str>> for PropList {
-    fn from(other: &BTreeMap<&'a str, &'a str>) -> Self {
-        let data_cap: usize = other.iter().map(|(k, v)| k.len() + v.len()).sum();
-        let item_cap = other.len();
-        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, true)
-    }
-}
-
-impl<'a> From<&BTreeMap<Cow<'a, str>, Cow<'a, str>>> for PropList {
-    fn from(other: &BTreeMap<Cow<'a, str>, Cow<'a, str>>) -> Self {
-        let data_cap: usize = other.iter().map(|(k, v)| k.len() + v.len()).sum();
-        let item_cap = other.len();
-        Self::from_iter_unchecked(other.iter(), data_cap, item_cap, true)
-    }
-}
-
-impl<K: AsRef<str>, V: AsRef<str>> FromIterator<(K, V)> for PropList {
-    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
-        Self::from_iter(iter)
-    }
-}
-
-impl PartialEq for PropList {
+impl<const N: usize> PartialEq for PropList<N> {
     fn eq(&self, other: &Self) -> bool {
         self.items.eq(&other.items)
     }
 }
 
-impl Eq for PropList {}
+impl<const N: usize> Eq for PropList<N> {}
 
-impl Ord for PropList {
+impl<const N: usize> Ord for PropList<N> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
-impl Hash for PropList {
+impl<const N: usize> Hash for PropList<N> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for (k, v) in self.iter() {
-            k.hash(state);
-            v.hash(state);
+        for item in self.items.iter() {
+            item.hash(state);
         }
     }
 }
 
-impl PartialOrd for PropList {
+impl<const N: usize> PartialOrd for PropList<N> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl std::fmt::Debug for PropList {
+impl<const N: usize> std::fmt::Debug for PropList<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_map().entries(self.iter()).finish()
     }
 }
 
-impl std::fmt::Display for PropList {
+impl<const N: usize> std::fmt::Display for PropList<N> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.items.is_empty() {
             f.write_str("<empty>")
         } else {
             let item = &self.items[0];
-            f.write_str(item.key())?;
+            let (k, v) = item.key_value();
+            f.write_str(k)?;
             f.write_str("=")?;
-            f.write_str(item.value())?;
+            f.write_str(v)?;
             for item in &self.items[1..] {
+                let (k, v) = item.key_value();
                 f.write_str(";")?;
-                f.write_str(item.key())?;
+                f.write_str(k)?;
                 f.write_str("=")?;
-                f.write_str(item.value())?;
+                f.write_str(v)?;
             }
             Ok(())
         }
     }
 }
 
-struct PropListVisitor {
-    marker: PhantomData<fn() -> PropList>,
+struct PropListVisitor<const N: usize> {
+    marker: PhantomData<fn() -> PropList<N>>,
 }
 
-impl PropListVisitor {
+impl<const N: usize> PropListVisitor<N> {
     fn new() -> Self {
         Self {
             marker: PhantomData,
@@ -425,10 +481,10 @@ impl PropListVisitor {
     }
 }
 
-impl<'de> Visitor<'de> for PropListVisitor {
-    type Value = PropList;
+impl<'de, const N: usize> Visitor<'de> for PropListVisitor<N> {
+    type Value = PropList<N>;
 
-    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a string -> string map")
     }
 
@@ -436,9 +492,8 @@ impl<'de> Visitor<'de> for PropListVisitor {
     where
         M: MapAccess<'de>,
     {
-        let item_cap = access.size_hint().unwrap_or(8);
-        let data_cap = item_cap * 8;
-        let mut new = PropList::with_capacity(data_cap, item_cap);
+        let capacity = access.size_hint().unwrap_or(0);
+        let mut new = PropList::with_capacity(capacity);
         while let Some((key, value)) = access.next_entry()? {
             new.insert(key, value);
         }
@@ -446,7 +501,7 @@ impl<'de> Visitor<'de> for PropListVisitor {
     }
 }
 
-impl<'de> Deserialize<'de> for PropList {
+impl<'de, const N: usize> Deserialize<'de> for PropList<N> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -458,95 +513,11 @@ impl<'de> Deserialize<'de> for PropList {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_bytespool() {
-        let mut pool = BytesPool::with_capacity(64);
-        assert_eq!(pool.unallocated.capacity(), 64);
-
-        // Simple allocations
-        let mut a = pool.store(b"hello");
-        assert_eq!(a.as_ref(), b"hello");
-        assert_eq!(pool.allocated, 5);
-        assert_eq!(pool.used, 5);
-        assert_eq!(pool.unallocated.capacity(), 59);
-        let b = pool.store(b" world");
-        assert_eq!(b.as_ref(), b" world");
-        assert_eq!(pool.allocated, 11);
-        assert_eq!(pool.used, 11);
-        assert_eq!(pool.unallocated.capacity(), 53);
-
-        // Buffer slice should be reused when new data fits
-        pool.reuse_or_store(b"'sup", &mut a);
-        assert_eq!(a.as_ref(), b"'sup", "incorrect data after reuse");
-        assert_eq!(b.as_ref(), b" world");
-        assert_eq!(pool.allocated, 11);
-        assert_eq!(pool.used, 10);
-        assert_eq!(pool.unallocated.capacity(), 53);
-
-        // Buffer slice should be swapped when new data doesn't fit
-        pool.reuse_or_store(b"goodbye", &mut a);
-        assert_eq!(a.as_ref(), b"goodbye", "incorrect data after reuse");
-        assert_eq!(b.as_ref(), b" world", "reuse overran into next buffer");
-        assert_eq!(pool.allocated, 18);
-        assert_eq!(pool.used, 13);
-        assert_eq!(pool.unallocated.capacity(), 46);
-
-        // New allocation shouldn't use the free'd buffer if data won't fit
-        assert_eq!(pool.free.len(), 1);
-        let c = pool.store(b"foobarbaz");
-        assert_eq!(pool.free.len(), 1);
-        assert_eq!(pool.allocated, 27);
-        assert_eq!(pool.used, 22);
-        assert_eq!(pool.unallocated.capacity(), 37);
-
-        // New allocation should use the free'd buffer if it will fit
-        assert_eq!(pool.free.len(), 1);
-        let d = pool.store(b"foo");
-        assert_eq!(pool.free.len(), 0);
-        assert_eq!(pool.allocated, 27);
-        assert_eq!(pool.used, 25);
-        assert_eq!(pool.unallocated.capacity(), 37);
-
-        // Smallest suitable free buffer should be used
-        pool.free(d);
-        pool.free(c);
-        pool.free(b);
-        pool.free(a);
-        assert_eq!(
-            pool.free
-                .iter()
-                .map(|buf| buf.capacity())
-                .collect::<Vec<usize>>(),
-            vec![5, 6, 7, 9]
-        );
-        assert_eq!(pool.used, 0);
-        let e = pool.store(b"foobar");
-        assert_eq!(
-            pool.free
-                .iter()
-                .map(|buf| buf.capacity())
-                .collect::<Vec<usize>>(),
-            vec![5, 7, 9]
-        );
-        assert_eq!(pool.allocated, 27);
-        assert_eq!(pool.used, 6);
-        assert_eq!(pool.unallocated.capacity(), 37);
-
-        // Should be able to recover entire buffer by freeing all buffers
-        pool.free(e);
-        assert_eq!(pool.used, 0);
-        assert!(pool.try_reclaim(), "unable to reclaim buffer");
-        assert_eq!(pool.allocated, 0);
-        assert_eq!(pool.used, 0);
-        assert_eq!(pool.unallocated.capacity(), 64);
-    }
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_proplist_crud() {
-        let mut a = PropList::new();
-        assert_eq!(a.pool.unallocated.capacity(), 64);
-        assert_eq!(a.items.capacity(), 8);
+        let mut a = DefaultPropList::new();
         assert!(a.is_empty());
         assert_eq!(a.len(), 0);
         assert_eq!(format!("{a:?}"), "{}");
@@ -579,11 +550,23 @@ mod tests {
         assert!(!a.remove("a")); // Only returns true if there was an item to remove
         assert_eq!(format!("{a:?}"), "{\"b\": \"123\"}");
         assert_eq!(format!("{a}"), "b=123");
+
+        // Retain
+        a.insert("foo", "bar");
+        a.insert("baz", "quux");
+        assert_eq!(format!("{a}"), "b=123;baz=quux;foo=bar");
+        a.retain(|key, _| key.starts_with("b"));
+        assert_eq!(format!("{a}"), "b=123;baz=quux");
+
+        // Clear
+        a.clear();
+        assert!(a.is_empty());
+        assert_eq!(format!("{a:?}"), "{}");
     }
 
     #[test]
     fn test_proplist_traits() {
-        let mut a = PropList::new();
+        let mut a = DefaultPropList::new();
         a.insert("foo", "hello");
         a.insert("bar", " world");
         let b = a.clone();
@@ -603,12 +586,14 @@ mod tests {
         assert_ne!(b, c);
 
         // Ordering
-        assert!(PropList::new() < *PropList::new().insert("a", "a"));
-        assert!(*PropList::new().insert("a", "a") > PropList::new());
-        assert!(*PropList::new().insert("a", "a") < *PropList::new().insert("a", "b"));
+        assert!(DefaultPropList::new() < *DefaultPropList::new().insert("a", "a"));
+        assert!(*DefaultPropList::new().insert("a", "a") > DefaultPropList::new());
         assert!(
-            *PropList::new().insert("a", "a").insert("b", "a")
-                < *PropList::new().insert("a", "a").insert("c", "a")
+            *DefaultPropList::new().insert("a", "a") < *DefaultPropList::new().insert("a", "b")
+        );
+        assert!(
+            *DefaultPropList::new().insert("a", "a").insert("b", "a")
+                < *DefaultPropList::new().insert("a", "a").insert("c", "a")
         );
     }
 }

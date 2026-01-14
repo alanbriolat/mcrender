@@ -8,7 +8,7 @@ use image::imageops::overlay;
 use image::{GenericImageView, Rgb, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
-use crate::proplist::PropList;
+use crate::proplist::DefaultPropList as PropList;
 use crate::settings::{AssetRenderSpec, Settings};
 use crate::world::BlockRef;
 
@@ -36,7 +36,7 @@ pub const DEFAULT_BIOME: &str = "minecraft:plains";
 
 impl AssetInfo {
     pub fn new<V: AsRef<str>>(name: V) -> Self {
-        Self(PropList::new()).with_property(PROP_NAME, name)
+        Self(PropList::with_capacity(2)).with_property(PROP_NAME, name)
     }
 
     pub fn with_property<K: AsRef<str>, V: AsRef<str>>(mut self, k: K, v: V) -> Self {
