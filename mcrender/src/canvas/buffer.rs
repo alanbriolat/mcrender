@@ -168,6 +168,29 @@ impl<'a> From<&'a mut image::RgbaImage> for ImageBuf<Rgba<u8>, &'a mut [u8]> {
     }
 }
 
+/// Adapt `ImageBuf` as image-rs `image::ImageBuffer` sharing the same underlying buffer.
+impl<'a, B> From<&'a ImageBuf<Rgba<u8>, B>> for image::ImageBuffer<image::Rgba<u8>, &'a [u8]>
+where
+    B: AsRef<[u8]>,
+{
+    fn from(image: &'a ImageBuf<Rgba<u8>, B>) -> Self {
+        image::ImageBuffer::from_raw(image.width as u32, image.height as u32, image.data.as_ref())
+            .unwrap()
+    }
+}
+
+/// Adapt `ImageBuf` as image-rs `image::ImageBuffer` sharing the same underlying buffer.
+impl<'a, B> From<&'a mut ImageBuf<Rgba<u8>, B>>
+    for image::ImageBuffer<image::Rgba<u8>, &'a mut [u8]>
+where
+    B: AsMut<[u8]>,
+{
+    fn from(image: &'a mut ImageBuf<Rgba<u8>, B>) -> Self {
+        image::ImageBuffer::from_raw(image.width as u32, image.height as u32, image.data.as_mut())
+            .unwrap()
+    }
+}
+
 /// Convert `ImageBuf` into image-rs `image::RgbaImage`, giving it ownership of the underlying buffer.
 impl From<ImageBuf<Rgba<u8>, Vec<u8>>> for image::RgbaImage {
     fn from(image: ImageBuf<Rgba<u8>, Vec<u8>>) -> Self {

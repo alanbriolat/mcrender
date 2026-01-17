@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -8,11 +7,11 @@ use image::imageops::overlay;
 use image::{GenericImageView, Rgb, Rgba, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
+use crate::canvas;
+use crate::canvas::{Image, ImageBuf, Pixel, Rgba8};
 use crate::proplist::DefaultPropList as PropList;
 use crate::settings::{AssetRenderSpec, Settings};
 use crate::world::BlockRef;
-
-pub const TILE_SIZE: u32 = 24;
 
 /// The sides of a cube/block. The ordering defines the preferred render order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -97,7 +96,7 @@ impl std::fmt::Display for AssetInfo {
 pub struct AssetCache<'s> {
     path: PathBuf,
     textures: Mutex<HashMap<PathBuf, Arc<RgbaImage>>>,
-    assets: Mutex<HashMap<AssetInfo, Option<Arc<Asset>>>>,
+    assets: Mutex<HashMap<AssetInfo, Option<Arc<Sprite>>>>,
     projection_east: Projection,
     projection_south: Projection,
     projection_top: Projection,
@@ -190,7 +189,7 @@ impl<'s> AssetCache<'s> {
         )
     }
 
-    pub fn get_asset(&self, block: &BlockRef) -> Option<Arc<Asset>> {
+    pub fn get_asset(&self, block: &BlockRef) -> Option<Arc<Sprite>> {
         let (rule, info) = self.settings.asset_rules.get(block);
 
         // TODO: RwLock instead?
@@ -200,10 +199,10 @@ impl<'s> AssetCache<'s> {
         }
 
         match self.create_asset(&info, &rule.render) {
-            Ok(Some(asset)) => {
-                let asset = Some(Arc::new(asset));
-                assets.insert(info, asset.clone());
-                asset
+            Ok(Some(sprite)) => {
+                let sprite = Some(Arc::new(sprite));
+                assets.insert(info, sprite.clone());
+                sprite
             }
             Ok(None) => {
                 assets.insert(info, None);
@@ -222,7 +221,7 @@ impl<'s> AssetCache<'s> {
         &self,
         info: &AssetInfo,
         renderer: &AssetRenderSpec,
-    ) -> anyhow::Result<Option<Asset>> {
+    ) -> anyhow::Result<Option<Sprite>> {
         use AssetRenderSpec::*;
 
         log::debug!("creating asset");
@@ -233,7 +232,7 @@ impl<'s> AssetCache<'s> {
                 let texture_name = texture.apply(info);
                 let texture = self.get_block_texture(texture_name)?;
                 let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
-                Ok(Some(Asset { image: output }))
+                Ok(Some(output))
             }
 
             SolidTopSide {
@@ -255,7 +254,7 @@ impl<'s> AssetCache<'s> {
                     tint_in_place(&mut texture, actual_tint_color);
                 }
                 let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
-                Ok(Some(Asset { image: output }))
+                Ok(Some(output))
             }
 
             Plant {
@@ -271,14 +270,14 @@ impl<'s> AssetCache<'s> {
                     tint_in_place(&mut texture, actual_tint_color);
                 }
                 let output = self.render_plant(&texture);
-                Ok(Some(Asset { image: output }))
+                Ok(Some(output))
             }
 
             Crop { texture } => {
                 let texture_name = texture.apply(info);
                 let texture = self.get_block_texture(texture_name)?;
                 let output = self.render_crop(&texture);
-                Ok(Some(Asset { image: output }))
+                Ok(Some(output))
             }
 
             Grass { tint_color } => {
@@ -336,7 +335,7 @@ impl<'s> AssetCache<'s> {
                     west_texture,
                     &TINT_BLOCK_3D,
                 );
-                Ok(Some(Asset { image: output }))
+                Ok(Some(output))
             }
 
             Water { tint_color } => {
@@ -344,9 +343,7 @@ impl<'s> AssetCache<'s> {
                     .apply(info, self.settings)
                     .unwrap_or(Rgb([255, 255, 255]));
                 self.create_water_block(info, actual_tint_color)
-            }
-
-            _ => unimplemented!(),
+            } // _ => unreachable!(),
         }
     }
 
@@ -356,7 +353,7 @@ impl<'s> AssetCache<'s> {
         info: &AssetInfo,
         top_texture: &RgbaImage,
         side_texture: &RgbaImage,
-    ) -> anyhow::Result<Option<Asset>> {
+    ) -> anyhow::Result<Option<Sprite>> {
         let output = match info.get_property("axis") {
             None | Some("y") => {
                 self.render_solid_block(&top_texture, &side_texture, &side_texture, &TINT_BLOCK_3D)
@@ -383,14 +380,14 @@ impl<'s> AssetCache<'s> {
                 return Err(anyhow!("unsupported axis value: {}", axis));
             }
         };
-        Ok(Some(Asset { image: output }))
+        Ok(Some(output))
     }
 
     fn create_grass_block(
         &self,
         _info: &AssetInfo,
         biome_tint: Rgb<u8>,
-    ) -> anyhow::Result<Option<Asset>> {
+    ) -> anyhow::Result<Option<Sprite>> {
         let mut top = (*self.get_block_texture("grass_block_top")?).clone();
         tint_in_place(&mut top, biome_tint);
         let mut side_overlay = (*self.get_block_texture("grass_block_side_overlay")?).clone();
@@ -398,14 +395,14 @@ impl<'s> AssetCache<'s> {
         let mut side = (*self.get_block_texture("dirt")?).clone();
         overlay(&mut side, &side_overlay, 0, 0);
         let output = self.render_solid_block(&top, &side, &side, &TINT_BLOCK_3D);
-        Ok(Some(Asset { image: output }))
+        Ok(Some(output))
     }
 
     fn create_water_block(
         &self,
         info: &AssetInfo,
         tint_color: Rgb<u8>,
-    ) -> anyhow::Result<Option<Asset>> {
+    ) -> anyhow::Result<Option<Sprite>> {
         // let mut texture = (*self.get_block_texture("water_still")?).clone();
         let mut texture = RgbaImage::from_pixel(16, 16, Rgba([255, 255, 255, 120]));
         tint_in_place(&mut texture, tint_color);
@@ -415,7 +412,7 @@ impl<'s> AssetCache<'s> {
             &TINT_BLOCK_NONE
         };
         let output = self.render_solid_block(&texture, &texture, &texture, block_tints);
-        Ok(Some(Asset { image: output }))
+        Ok(Some(output))
     }
 
     /// Render a solid block with the 3 specified face textures.
@@ -425,14 +422,14 @@ impl<'s> AssetCache<'s> {
         south_texture: &RgbaImage,
         east_texture: &RgbaImage,
         tints: &SolidBlockTints,
-    ) -> RgbaImage {
+    ) -> Sprite {
         let top = self.render_block_face(top_texture, Face::Top, tints.top);
         let south = self.render_block_face(south_texture, Face::South, tints.south);
         let east = self.render_block_face(east_texture, Face::East, tints.east);
-        let mut output = RgbaImage::new(TILE_SIZE, TILE_SIZE);
-        overlay(&mut output, &east, 0, 0);
-        overlay(&mut output, &south, 0, 0);
-        overlay(&mut output, &top, 0, 0);
+        let mut output = Sprite::default();
+        canvas::overlay(&mut *output, &*east);
+        canvas::overlay(&mut *output, &*south);
+        canvas::overlay(&mut *output, &*top);
         output
     }
 
@@ -445,42 +442,37 @@ impl<'s> AssetCache<'s> {
         north_texture: Option<&RgbaImage>,
         west_texture: Option<&RgbaImage>,
         tints: &SolidBlockTints,
-    ) -> RgbaImage {
-        let mut output = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+    ) -> Sprite {
+        let mut output = Sprite::default();
         if let Some(texture) = bottom_texture {
             let projected = self.render_block_face(texture, Face::Bottom, tints.top);
-            overlay(&mut output, &projected, 0, 0);
+            canvas::overlay(&mut *output, &*projected);
         }
         if let Some(texture) = north_texture {
             let projected = self.render_block_face(texture, Face::North, tints.south);
-            overlay(&mut output, &projected, 0, 0);
+            canvas::overlay(&mut *output, &*projected);
         }
         if let Some(texture) = west_texture {
             let projected = self.render_block_face(texture, Face::West, tints.east);
-            overlay(&mut output, &projected, 0, 0);
+            canvas::overlay(&mut *output, &*projected);
         }
         if let Some(texture) = east_texture {
             let projected = self.render_block_face(texture, Face::East, tints.east);
-            overlay(&mut output, &projected, 0, 0);
+            canvas::overlay(&mut *output, &*projected);
         }
         if let Some(texture) = south_texture {
             let projected = self.render_block_face(texture, Face::South, tints.south);
-            overlay(&mut output, &projected, 0, 0);
+            canvas::overlay(&mut *output, &*projected);
         }
         if let Some(texture) = top_texture {
             let projected = self.render_block_face(texture, Face::Top, tints.top);
-            overlay(&mut output, &projected, 0, 0);
+            canvas::overlay(&mut *output, &*projected);
         }
         output
     }
 
     /// Project a 16x16 `texture` onto a face of a 24x24 isometric cube.
-    fn render_block_face(
-        &self,
-        texture: &RgbaImage,
-        face: Face,
-        tint: Option<Rgb<u8>>,
-    ) -> RgbaImage {
+    fn render_block_face(&self, texture: &RgbaImage, face: Face, tint: Option<Rgb<u8>>) -> Sprite {
         debug_assert_eq!(texture.dimensions(), (16, 16));
         let projection = match face {
             Face::East => &self.projection_east,
@@ -489,9 +481,9 @@ impl<'s> AssetCache<'s> {
             Face::West => &self.projection_west,
             Face::North => &self.projection_north,
             Face::Bottom => &self.projection_bottom,
-            _ => unimplemented!(),
+            // _ => unreachable!(),
         };
-        let mut buffer = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+        let mut buffer = RgbaImage::new(SPRITE_SIZE, SPRITE_SIZE);
         warp_into(
             texture,
             projection,
@@ -502,13 +494,13 @@ impl<'s> AssetCache<'s> {
         if let Some(tint_color) = tint {
             tint_in_place(&mut buffer, tint_color);
         }
-        buffer
+        Sprite::try_from(buffer).unwrap()
     }
 
     /// Render a simple plant, where in-game a single-texture is rendered in an X in the
     /// bottom-center of the block.
-    fn render_plant(&self, texture: &RgbaImage) -> RgbaImage {
-        let mut buffer = RgbaImage::new(TILE_SIZE, TILE_SIZE);
+    fn render_plant(&self, texture: &RgbaImage) -> Sprite {
+        let mut buffer = RgbaImage::new(SPRITE_SIZE, SPRITE_SIZE);
         let front_projection = flatten_projection([
             Projection::scale(1., 12. / 16.),
             Projection::translate(4., 6.),
@@ -520,12 +512,12 @@ impl<'s> AssetCache<'s> {
             Rgba([0, 0, 0, 0]),
             &mut buffer,
         );
-        buffer
+        Sprite::try_from(buffer).unwrap()
     }
 
     /// Render a slightly more complex plant, where in-game a single texture is rendered in a #
     /// shape in the bottom-center of the block.
-    fn render_crop(&self, texture: &RgbaImage) -> RgbaImage {
+    fn render_crop(&self, texture: &RgbaImage) -> Sprite {
         let south = self.render_block_face(texture, Face::South, TINT_BLOCK_NONE.south);
         let south_back = south.view(0, 6, 2, 13);
         let south_mid = south.view(2, 7, 8, 16);
@@ -534,19 +526,19 @@ impl<'s> AssetCache<'s> {
         let east_back = east.view(22, 6, 2, 13);
         let east_mid = east.view(14, 7, 8, 16);
         let east_front = east.view(12, 11, 2, 13);
-        let mut output = RgbaImage::new(TILE_SIZE, TILE_SIZE);
-        overlay(&mut output, south_back.deref(), 10, 1);
-        overlay(&mut output, east_back.deref(), 12, 1);
-        overlay(&mut output, south_back.deref(), 2, 5);
-        overlay(&mut output, east_mid.deref(), 4, 2);
-        overlay(&mut output, south_mid.deref(), 12, 2);
-        overlay(&mut output, east_back.deref(), 20, 5);
-        overlay(&mut output, east_front.deref(), 2, 6);
-        overlay(&mut output, south_mid.deref(), 4, 6);
-        overlay(&mut output, east_mid.deref(), 12, 6);
-        overlay(&mut output, south_front.deref(), 20, 6);
-        overlay(&mut output, east_front.deref(), 10, 10);
-        overlay(&mut output, south_front.deref(), 12, 10);
+        let mut output = Sprite::default();
+        canvas::overlay_at(&mut *output, &south_back, 10, 1);
+        canvas::overlay_at(&mut *output, &east_back, 12, 1);
+        canvas::overlay_at(&mut *output, &south_back, 2, 5);
+        canvas::overlay_at(&mut *output, &east_mid, 4, 2);
+        canvas::overlay_at(&mut *output, &south_mid, 12, 2);
+        canvas::overlay_at(&mut *output, &east_back, 20, 5);
+        canvas::overlay_at(&mut *output, &east_front, 2, 6);
+        canvas::overlay_at(&mut *output, &south_mid, 4, 6);
+        canvas::overlay_at(&mut *output, &east_mid, 12, 6);
+        canvas::overlay_at(&mut *output, &south_front, 20, 6);
+        canvas::overlay_at(&mut *output, &east_front, 10, 10);
+        canvas::overlay_at(&mut *output, &south_front, 12, 10);
         output
     }
 }
@@ -592,8 +584,34 @@ fn tint_in_place(image: &mut RgbaImage, tint: Rgb<u8>) {
 //     }
 // }
 
-pub struct Asset {
-    pub image: RgbaImage,
+pub const SPRITE_SIZE: u32 = 24;
+const SPRITE_BUF_SIZE: usize =
+    SPRITE_SIZE as usize * SPRITE_SIZE as usize * <Rgba8 as Pixel>::CHANNELS;
+
+#[derive(derive_more::Deref, derive_more::DerefMut)]
+pub struct Sprite(ImageBuf<Rgba8, [u8; SPRITE_BUF_SIZE]>);
+
+impl Default for Sprite {
+    fn default() -> Self {
+        Self(ImageBuf::from_raw(24, 24, [0; SPRITE_BUF_SIZE]).unwrap())
+    }
+}
+
+impl TryFrom<RgbaImage> for Sprite {
+    type Error = ();
+
+    fn try_from(image: RgbaImage) -> Result<Self, Self::Error> {
+        let samples = image.into_flat_samples().samples;
+        if samples.len() < SPRITE_BUF_SIZE {
+            Err(())
+        } else {
+            let mut buf = [0; SPRITE_BUF_SIZE];
+            buf.copy_from_slice(&samples[..SPRITE_BUF_SIZE]);
+            Ok(Self(
+                ImageBuf::from_raw(SPRITE_SIZE as usize, SPRITE_SIZE as usize, buf).unwrap(),
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

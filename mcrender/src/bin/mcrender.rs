@@ -5,11 +5,12 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use config::FileFormat;
 use image::imageops::FilterType;
-use image::{Rgb, Rgba, RgbaImage};
+use image::{ImageBuffer, Rgb, Rgba, RgbaImage};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
+use mcrender::canvas::Image;
 use mcrender::render::{DirectoryRenderCache, Renderer};
 use mcrender::settings::{Settings, convert_rgb};
 use mcrender::world::{BIndex, BlockRef, DimensionID, RCoords};
@@ -102,10 +103,11 @@ fn main() -> Result<()> {
             let asset = asset_cache
                 .get_asset(&block_ref)
                 .ok_or(anyhow!("no such asset"))?;
+            let wrapped = ImageBuffer::from(&**asset);
             let mut image = image::imageops::resize(
-                &asset.image,
-                asset.image.width() * scale,
-                asset.image.height() * scale,
+                &wrapped,
+                wrapped.width() * scale,
+                wrapped.height() * scale,
                 FilterType::Nearest,
             );
             if let Some(background) = background {
