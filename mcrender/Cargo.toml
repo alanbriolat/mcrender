@@ -19,6 +19,7 @@ imageproc = { version = "0.26.0" }
 tracing = "0.1.44"
 derive_more = { version = "2.1.1", features = ["full"] }
 config = "0.15.19"
+num-traits = "0.2.19"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }

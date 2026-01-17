@@ -1,4 +1,5 @@
 pub mod asset;
+mod canvas;
 pub mod coords;
 pub mod proplist;
 pub mod render;

@@ -1153,6 +1153,7 @@ dependencies = [
  "image",
  "imageproc",
  "log",
+ "num-traits",
  "rand",
  "serde",
  "tracing",
