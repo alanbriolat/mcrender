@@ -15,9 +15,61 @@ impl Subpixel for f32 {
     const MAX: f32 = 1.0;
 }
 
-pub trait Pixel:
-    Copy + Clone + Deref<Target = [Self::Subpixel]> + private::TransmutablePixel
-{
+pub trait Pixel: Copy + Clone + Deref<Target = [Self::Subpixel]> {
+    type Subpixel: Subpixel;
+    const CHANNELS: usize;
+}
+
+/// Mark a `Pixel` type as having the correct layout to transmute between a slice of pixels and a
+/// slice of channels.
+pub unsafe trait TransmutablePixel: Pixel {
+    #[inline(always)]
+    fn channels_from_slice(_: private::PrivateToken, pixels: &[Self]) -> &[Self::Subpixel] {
+        unsafe {
+            std::slice::from_raw_parts(
+                pixels.as_ptr() as *const Self::Subpixel,
+                pixels.len() * Self::CHANNELS,
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn channels_from_slice_mut(
+        _: private::PrivateToken,
+        pixels: &mut [Self],
+    ) -> &mut [Self::Subpixel] {
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                pixels.as_mut_ptr() as *mut Self::Subpixel,
+                pixels.len() * Self::CHANNELS,
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn slice_from_channels(_: private::PrivateToken, channels: &[Self::Subpixel]) -> &[Self] {
+        assert_eq!(channels.len() % Self::CHANNELS, 0);
+        unsafe {
+            std::slice::from_raw_parts(
+                channels.as_ptr() as *const Self,
+                channels.len() / Self::CHANNELS,
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn slice_from_channels_mut(
+        _: private::PrivateToken,
+        channels: &mut [Self::Subpixel],
+    ) -> &mut [Self] {
+        assert_eq!(channels.len() % Self::CHANNELS, 0);
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                channels.as_mut_ptr() as *mut Self,
+                channels.len() / Self::CHANNELS,
+            )
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, derive_more::From, derive_more::Into)]
@@ -38,9 +90,15 @@ impl DerefMut for Rgb<u8> {
     }
 }
 
-impl Pixel for Rgb<u8> {}
+impl<T: Subpixel> Pixel for Rgb<T> {
+    type Subpixel = T;
+    const CHANNELS: usize = 3;
+}
+
+unsafe impl TransmutablePixel for Rgb<u8> {}
+unsafe impl TransmutablePixel for Rgb<f32> {}
+
 pub type Rgb8 = Rgb<u8>;
-impl Pixel for Rgb<f32> {}
 pub type Rgb32f = Rgb<f32>;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, derive_more::From, derive_more::Into)]
@@ -61,12 +119,18 @@ impl DerefMut for Rgba<u8> {
     }
 }
 
-impl Pixel for Rgba<u8> {}
+impl<T: Subpixel> Pixel for Rgba<T> {
+    type Subpixel = T;
+    const CHANNELS: usize = 4;
+}
+
+unsafe impl TransmutablePixel for Rgba<u8> {}
+unsafe impl TransmutablePixel for Rgba<f32> {}
+
 pub type Rgba8 = Rgba<u8>;
-impl Pixel for Rgba<f32> {}
 pub type Rgba32f = Rgba<f32>;
 
-pub struct Buffer<P: Pixel, Container = Vec<<P as private::TransmutablePixel>::Subpixel>> {
+pub struct ImageBuf<P: Pixel, Container = Vec<<P as Pixel>::Subpixel>> {
     width: usize,
     height: usize,
     len: usize,
@@ -74,15 +138,15 @@ pub struct Buffer<P: Pixel, Container = Vec<<P as private::TransmutablePixel>::S
     _phantom: PhantomData<P>,
 }
 
-impl<P: Pixel, Container> Buffer<P, Container> {
+impl<P: Pixel, Container> ImageBuf<P, Container> {
     pub fn into_inner(self) -> Container {
         self.data
     }
 }
 
-impl<P, Container> Buffer<P, Container>
+impl<P, Container> ImageBuf<P, Container>
 where
-    P: Pixel,
+    P: TransmutablePixel,
     Container: AsRef<[P::Subpixel]>,
 {
     pub fn from_raw(width: usize, height: usize, buf: Container) -> Option<Self> {
@@ -128,9 +192,9 @@ where
     }
 }
 
-impl<P, Container> Buffer<P, Container>
+impl<P, Container> ImageBuf<P, Container>
 where
-    P: Pixel,
+    P: TransmutablePixel,
     Container: AsMut<[P::Subpixel]>,
 {
     #[inline]
@@ -144,7 +208,7 @@ where
     }
 }
 
-impl<P: Pixel> Buffer<P, Vec<P::Subpixel>> {
+impl<P: Pixel> ImageBuf<P, Vec<P::Subpixel>> {
     pub fn from_pixel(width: usize, height: usize, pixel: P) -> Self {
         let count = width * height;
         let len = count * P::CHANNELS;
@@ -159,6 +223,40 @@ impl<P: Pixel> Buffer<P, Vec<P::Subpixel>> {
             data,
             _phantom: PhantomData,
         }
+    }
+}
+
+/// Adapt image-rs `image::RgbaImage` as `ImageBuf` sharing the same underlying buffer.
+impl<'a> From<&'a image::RgbaImage> for ImageBuf<Rgba<u8>, &'a [u8]> {
+    fn from(image: &'a image::RgbaImage) -> Self {
+        Self::from_raw(
+            image.width() as usize,
+            image.height() as usize,
+            image.as_ref(),
+        )
+        .unwrap()
+    }
+}
+
+/// Adapt image-rs `image::RgbaImage` as `ImageBuf` sharing the same underlying buffer.
+impl<'a> From<&'a mut image::RgbaImage> for ImageBuf<Rgba<u8>, &'a mut [u8]> {
+    fn from(image: &'a mut image::RgbaImage) -> Self {
+        Self::from_raw(
+            image.width() as usize,
+            image.height() as usize,
+            image.as_mut(),
+        )
+        .unwrap()
+    }
+}
+
+/// Convert `ImageBuf` into image-rs `image::RgbaImage`, giving it ownership of the underlying buffer.
+impl From<ImageBuf<Rgba<u8>, Vec<u8>>> for image::RgbaImage {
+    fn from(image: ImageBuf<Rgba<u8>, Vec<u8>>) -> Self {
+        assert!(image.width <= u32::MAX as usize);
+        assert!(image.height <= u32::MAX as usize);
+        image::RgbaImage::from_raw(image.width as u32, image.height as u32, image.into_inner())
+            .unwrap()
     }
 }
 
@@ -177,26 +275,12 @@ pub trait Image {
 
     fn get_pixel_row(&self, y: usize) -> Option<&[Self::Pixel]>;
 
-    fn get_channels_row(
-        &self,
-        y: usize,
-    ) -> Option<&[<Self::Pixel as private::TransmutablePixel>::Subpixel]> {
-        self.get_pixel_row(y).map(|pixels| {
-            <Self::Pixel as private::TransmutablePixel>::channels_from_slice(
-                private::PrivateToken,
-                pixels,
-            )
-        })
-    }
-
     fn pixel_rows(&self) -> impl Iterator<Item = &[Self::Pixel]> + '_ {
         (0..self.height()).map(|y| self.get_pixel_row(y).unwrap())
     }
 
-    fn view(&self, left: usize, top: usize, width: usize, height: usize) -> View<&Self> {
-        assert!(left + width <= self.width());
-        assert!(top + height <= self.height());
-        View::new(self, left, top, width, height)
+    fn view(&self, left: usize, top: usize, width: usize, height: usize) -> ImageView<&Self> {
+        ImageView::new(self, left, top, width, height)
     }
 }
 
@@ -205,51 +289,20 @@ pub trait ImageMut: Image {
 
     fn get_pixel_row_mut(&mut self, y: usize) -> Option<&mut [Self::Pixel]>;
 
-    fn get_channels_row_mut(
-        &mut self,
-        y: usize,
-    ) -> Option<&mut [<Self::Pixel as private::TransmutablePixel>::Subpixel]> {
-        self.get_pixel_row_mut(y).map(|pixels| {
-            <Self::Pixel as private::TransmutablePixel>::channels_from_slice_mut(
-                private::PrivateToken,
-                pixels,
-            )
-        })
-    }
-
     fn view_mut(
         &mut self,
         left: usize,
         top: usize,
         width: usize,
         height: usize,
-    ) -> View<&mut Self> {
-        assert!(left + width <= self.width());
-        assert!(top + height <= self.height());
-        View::new(self, left, top, width, height)
-    }
-
-    /// Overlay `other` in top-left corner of this `Image`, according to the `Overlay` implementation
-    /// between the two `Pixel` types. It's allowable for the images to have different sizes, only
-    /// the overlap will be processed.
-    fn overlay<I>(&mut self, other: &I)
-    where
-        I: Image,
-        [Self::Pixel]: Overlay<[I::Pixel]>,
-    {
-        let rows = min(self.height(), other.height());
-        let cols = min(self.width(), other.width());
-        for y in 0..rows {
-            let own_row = &mut self.get_pixel_row_mut(y).unwrap()[..cols];
-            let other_row = &other.get_pixel_row(y).unwrap()[..cols];
-            own_row.overlay(other_row);
-        }
+    ) -> ImageView<&mut Self> {
+        ImageView::new(self, left, top, width, height)
     }
 }
 
-impl<P, Container> Image for Buffer<P, Container>
+impl<P, Container> Image for ImageBuf<P, Container>
 where
-    P: Pixel,
+    P: TransmutablePixel,
     Container: AsRef<[P::Subpixel]>,
 {
     type Pixel = P;
@@ -276,9 +329,9 @@ where
     }
 }
 
-impl<P, Container> ImageMut for Buffer<P, Container>
+impl<P, Container> ImageMut for ImageBuf<P, Container>
 where
-    P: Pixel,
+    P: TransmutablePixel,
     Container: AsRef<[P::Subpixel]> + AsMut<[P::Subpixel]>,
 {
     fn get_pixel_mut(&mut self, x: usize, y: usize) -> Option<&mut Self::Pixel> {
@@ -293,7 +346,7 @@ where
     }
 }
 
-pub struct View<I> {
+pub struct ImageView<I> {
     image: I,
     left: usize,
     top: usize,
@@ -301,8 +354,18 @@ pub struct View<I> {
     height: usize,
 }
 
-impl<I> View<I> {
-    fn new(image: I, left: usize, top: usize, width: usize, height: usize) -> Self {
+impl<I> ImageView<I>
+where
+    I: Deref,
+    I::Target: Image,
+{
+    /// Create a new `ImageView` wrapping around `image`, with the position and extent clamped to
+    /// remain within the area of `image`.
+    pub fn new(image: I, left: usize, top: usize, width: usize, height: usize) -> Self {
+        let left = min(left, image.width());
+        let top = min(top, image.height());
+        let width = min(width, image.width().saturating_sub(left));
+        let height = min(height, image.height().saturating_sub(top));
         Self {
             image,
             left,
@@ -311,51 +374,43 @@ impl<I> View<I> {
             height,
         }
     }
-}
 
-impl<I> View<I>
-where
-    I: Deref,
-    I::Target: Image,
-{
-    fn view(&self, left: usize, top: usize, width: usize, height: usize) -> View<&I::Target> {
-        assert!(left + width <= self.width);
-        assert!(top + height <= self.height);
-        View::new(
+    /// Alternative to `Image::view()` that will avoid an extra level of indirection.
+    fn view(&self, left: usize, top: usize, width: usize, height: usize) -> ImageView<&I::Target> {
+        ImageView::new(
             &*self.image,
-            left + self.left,
-            top + self.top,
+            left.saturating_add(self.left),
+            top.saturating_add(self.top),
             width,
             height,
         )
     }
 }
 
-impl<I> View<I>
+impl<I> ImageView<I>
 where
     I: Deref + DerefMut,
     I::Target: Image,
 {
+    /// Alternative to `ImageMut::view_mut()` that will avoid an extra level of indirection.
     fn view_mut(
         &mut self,
         left: usize,
         top: usize,
         width: usize,
         height: usize,
-    ) -> View<&mut I::Target> {
-        assert!(left + width <= self.width);
-        assert!(top + height <= self.height);
-        View::new(
+    ) -> ImageView<&mut I::Target> {
+        ImageView::new(
             &mut *self.image,
-            left + self.left,
-            top + self.top,
+            left.saturating_add(self.left),
+            top.saturating_add(self.top),
             width,
             height,
         )
     }
 }
 
-impl<I> Image for View<I>
+impl<I> Image for ImageView<I>
 where
     I: Deref,
     I::Target: Image,
@@ -383,7 +438,7 @@ where
     }
 }
 
-impl<I> ImageMut for View<I>
+impl<I> ImageMut for ImageView<I>
 where
     I: DerefMut,
     I::Target: ImageMut,
@@ -412,22 +467,6 @@ impl<'i, I: Image> Iterator for PixelRows<'i, I> {
     fn next(&mut self) -> Option<Self::Item> {
         match self.iter.next() {
             Some(i) => Some(self.image.get_pixel_row(i).unwrap()),
-            None => None,
-        }
-    }
-}
-
-pub struct ChannelRows<'i, I: Image> {
-    image: &'i I,
-    iter: Range<usize>,
-}
-
-impl<'i, I: Image> Iterator for ChannelRows<'i, I> {
-    type Item = &'i [<I::Pixel as private::TransmutablePixel>::Subpixel];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            Some(i) => Some(self.image.get_channels_row(i).unwrap()),
             None => None,
         }
     }
@@ -585,79 +624,53 @@ impl Overlay<Rgba<u8>> for Rgba<u8> {
     }
 }
 
+/// Overlay `src` in top-left corner of `dst`, according to the `Overlay` implementation
+/// between the two `Pixel` types. It's allowable for the images to have different sizes, only
+/// the overlap will be processed.
+pub fn overlay<D, S>(dst: &mut D, src: &S)
+where
+    D: ImageMut,
+    S: Image,
+    [D::Pixel]: Overlay<[S::Pixel]>,
+{
+    let rows = min(dst.height(), src.height());
+    let cols = min(dst.width(), src.width());
+    for y in 0..rows {
+        let own_row = &mut dst.get_pixel_row_mut(y).unwrap()[..cols];
+        let other_row = &src.get_pixel_row(y).unwrap()[..cols];
+        own_row.overlay(other_row);
+    }
+}
+
+/// Overlay `src` onto `dst`, with the given offset. Negative offsets are allowed, only the
+/// overlapping pixels will be affected.
+pub fn overlay_at<D, S>(dst: &mut D, src: &S, left: isize, top: isize)
+where
+    D: ImageMut,
+    S: Image,
+    [D::Pixel]: Overlay<[S::Pixel]>,
+{
+    // Calculate `dst` and `src` views to achieve the desired offset:
+    //   - A positive offset means an offset from the left/top of `dst`
+    //   - A negative offset means an offset from the left/top of `src`
+    let (dst_left, src_left) = if left < 0 {
+        (0, (-left) as usize)
+    } else {
+        (left as usize, 0)
+    };
+    let (dst_top, src_top) = if top < 0 {
+        (0, (-top) as usize)
+    } else {
+        (top as usize, 0)
+    };
+    let mut dst_view = dst.view_mut(dst_left, dst_top, usize::MAX, usize::MAX);
+    let src_view = src.view(src_left, src_top, usize::MAX, usize::MAX);
+    overlay(&mut dst_view, &src_view);
+}
+
 pub(crate) mod private {
     #[derive(Clone, Copy)]
     pub struct PrivateToken;
-
-    pub trait TransmutablePixel: Sized {
-        type Subpixel: Clone + Copy;
-        const CHANNELS: usize;
-
-        #[inline(always)]
-        fn channels_from_slice(_: PrivateToken, pixels: &[Self]) -> &[Self::Subpixel] {
-            unsafe {
-                std::slice::from_raw_parts(
-                    pixels.as_ptr() as *const Self::Subpixel,
-                    pixels.len() * Self::CHANNELS,
-                )
-            }
-        }
-
-        #[inline(always)]
-        fn channels_from_slice_mut(_: PrivateToken, pixels: &mut [Self]) -> &mut [Self::Subpixel] {
-            unsafe {
-                std::slice::from_raw_parts_mut(
-                    pixels.as_mut_ptr() as *mut Self::Subpixel,
-                    pixels.len() * Self::CHANNELS,
-                )
-            }
-        }
-
-        #[inline(always)]
-        fn slice_from_channels(_: PrivateToken, channels: &[Self::Subpixel]) -> &[Self] {
-            assert_eq!(channels.len() % Self::CHANNELS, 0);
-            unsafe {
-                std::slice::from_raw_parts(
-                    channels.as_ptr() as *const Self,
-                    channels.len() / Self::CHANNELS,
-                )
-            }
-        }
-
-        #[inline(always)]
-        fn slice_from_channels_mut(
-            _: PrivateToken,
-            channels: &mut [Self::Subpixel],
-        ) -> &mut [Self] {
-            assert_eq!(channels.len() % Self::CHANNELS, 0);
-            unsafe {
-                std::slice::from_raw_parts_mut(
-                    channels.as_mut_ptr() as *mut Self,
-                    channels.len() / Self::CHANNELS,
-                )
-            }
-        }
-    }
-
-    impl TransmutablePixel for super::Rgb<u8> {
-        type Subpixel = u8;
-        const CHANNELS: usize = 3;
-    }
-
-    impl TransmutablePixel for super::Rgba<u8> {
-        type Subpixel = u8;
-        const CHANNELS: usize = 4;
-    }
-
-    impl TransmutablePixel for super::Rgb<f32> {
-        type Subpixel = f32;
-        const CHANNELS: usize = 3;
-    }
-
-    impl TransmutablePixel for super::Rgba<f32> {
-        type Subpixel = f32;
-        const CHANNELS: usize = 4;
-    }
 }
 
 #[cfg(test)]
@@ -666,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_buffer() {
-        let mut buf = Buffer::<Rgba<u8>, _>::from_pixel(2, 3, [10, 20, 30, 40].into());
+        let mut buf = ImageBuf::<Rgba<u8>, _>::from_pixel(2, 3, [10, 20, 30, 40].into());
         assert_eq!(buf.channels()[1], 20);
         assert_eq!(buf.pixels()[1][1], 20);
         assert!(buf.get_pixel_mut(2, 2).is_none());
@@ -679,7 +692,7 @@ mod tests {
             1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10,
             10, 10, 11, 11, 11, 12, 12, 12,
         ];
-        let buf: Buffer<Rgb<u8>, _> = Buffer::from_raw(3, 4, raw_data).unwrap();
+        let buf: ImageBuf<Rgb<u8>, _> = ImageBuf::from_raw(3, 4, raw_data).unwrap();
         let view = buf.view(1, 1, 2, 3);
         assert_eq!(view.get_pixel(0, 0), Some(&Rgb([5, 5, 5])));
         let view = view.view(0, 1, 2, 2);
@@ -688,12 +701,12 @@ mod tests {
 
     #[test]
     fn test_overlay_buffer_rgb_rgb() {
-        let mut buf = Buffer::from_pixel(8, 6, Rgb::<u8>([127, 127, 127]));
-        let overlay = Buffer::from_pixel(2, 3, Rgb::<u8>([1, 1, 1]));
-        buf.overlay(&overlay);
+        let mut buf = ImageBuf::from_pixel(8, 6, Rgb::<u8>([127, 127, 127]));
+        let other = ImageBuf::from_pixel(2, 3, Rgb::<u8>([1, 1, 1]));
+        overlay(&mut buf, &other);
         for y in 0..buf.height() {
             for x in 0..buf.width() {
-                if overlay.in_bounds(x, y) {
+                if other.in_bounds(x, y) {
                     assert_eq!(buf.get_pixel(x, y), Some(&Rgb([1, 1, 1])));
                 } else {
                     assert_eq!(buf.get_pixel(x, y), Some(&Rgb([127, 127, 127])));
@@ -708,13 +721,12 @@ mod tests {
         let fg = Rgb::<u8>([1, 1, 1]);
         assert_ne!(bg, fg);
         // Create a buffer
-        let mut buf = Buffer::from_pixel(8, 6, bg);
+        let mut buf = ImageBuf::from_pixel(8, 6, bg);
         // Create a mutable view into that buffer
         let mut view = buf.view_mut(1, 2, 7, 4);
         // Create an overlay image, and apply it to the view
-        let overlay = Buffer::from_pixel(2, 3, fg);
-        view.overlay(&overlay);
-        // Rows above the view-adjusted overlay are unchanged
+        let other = ImageBuf::from_pixel(2, 3, fg);
+        overlay(&mut view, &other); // Rows above the view-adjusted overlay are unchanged
         for y in 0..2 {
             assert_eq!(
                 buf.get_pixel_row(y),
