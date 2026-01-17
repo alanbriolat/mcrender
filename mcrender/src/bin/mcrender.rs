@@ -11,7 +11,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
 use mcrender::canvas::Image;
-use mcrender::render::{DirectoryRenderCache, Renderer};
+use mcrender::render::Renderer;
 use mcrender::settings::{Settings, convert_rgb};
 use mcrender::world::{BIndex, BlockRef, DimensionID, RCoords};
 
@@ -49,8 +49,6 @@ enum Commands {
     RenderTest {
         source: PathBuf,
         target: PathBuf,
-        #[arg(short, long)]
-        cache_dir: Option<PathBuf>,
     },
 }
 
@@ -122,11 +120,7 @@ fn main() -> Result<()> {
             image.write_to(&mut output_file, image::ImageFormat::Png)?;
         }
 
-        Commands::RenderTest {
-            source,
-            target,
-            cache_dir,
-        } => {
+        Commands::RenderTest { source, target } => {
             let asset_cache = AssetCache::new(cli.assets, &settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
@@ -143,17 +137,13 @@ fn main() -> Result<()> {
             let chunk = raw_chunk.parse()?;
             // log::debug!("chunk: {:?}", chunk);
             let mut renderer = Renderer::new(asset_cache);
-            if let Some(cache_dir) = cache_dir {
-                renderer.set_render_cache(DirectoryRenderCache::new(cache_dir.clone())?);
-            }
-            let image = renderer.get_chunk(&raw_chunk)?;
-            // let image = renderer.get_region(&region_info)?;
+            let image = renderer.render_chunk(&raw_chunk)?;
+            // let image = renderer.render_region(&region_info)?;
 
+            let output_image = ImageBuffer::from(&image);
             let mut output_file = File::create(target)?;
-            image.write_to(&mut output_file, image::ImageFormat::Png)?;
-        }
-
-        _ => unimplemented!(),
+            output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
+        } // _ => unreachable!(),
     }
 
     Ok(())

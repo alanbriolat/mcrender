@@ -28,121 +28,17 @@ const REGION_TILE_MAP: TileMap = TileMap::new(
 const BLOCK_COUNT_SINGLE: PointXZY<u32> = PointXZY::new(1, 1, 1);
 const BLOCK_COUNT_CHUNK: PointXZY<u32> = PointXZY::new(CHUNK_SIZE, CHUNK_SIZE, WORLD_HEIGHT);
 
-pub trait RenderCache {
-    fn store_chunk(&self, coords: CCoords, image: &RgbaImage) -> anyhow::Result<()>;
-    fn load_chunk(&self, coords: CCoords) -> anyhow::Result<Option<RgbaImage>>;
-}
-
-pub struct NoCache();
-impl RenderCache for NoCache {
-    fn store_chunk(&self, _coords: CCoords, _image: &RgbaImage) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn load_chunk(&self, _coords: CCoords) -> anyhow::Result<Option<RgbaImage>> {
-        Ok(None)
-    }
-}
-
-pub struct MemoryRenderCache {
-    chunks: Mutex<BTreeMap<CCoords, RgbaImage>>,
-}
-
-impl MemoryRenderCache {
-    pub fn new() -> Self {
-        Self {
-            chunks: Mutex::new(BTreeMap::new()),
-        }
-    }
-}
-
-impl RenderCache for MemoryRenderCache {
-    fn store_chunk(&self, coords: CCoords, image: &RgbaImage) -> anyhow::Result<()> {
-        let mut chunks = self.chunks.lock().unwrap();
-        chunks.insert(coords, image.clone());
-        Ok(())
-    }
-
-    fn load_chunk(&self, coords: CCoords) -> anyhow::Result<Option<RgbaImage>> {
-        let chunks = self.chunks.lock().unwrap();
-        if let Some(image) = chunks.get(&coords) {
-            Ok(Some(image.clone()))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-pub struct DirectoryRenderCache {
-    dir: PathBuf,
-}
-
-impl DirectoryRenderCache {
-    pub fn new(dir: PathBuf) -> Result<Self, std::io::Error> {
-        std::fs::create_dir_all(&dir)?;
-        Ok(DirectoryRenderCache { dir })
-    }
-
-    fn chunk_path(&self, coords: CCoords) -> PathBuf {
-        self.dir
-            .join(format!("chunk.{}.{}.png", coords.x(), coords.z()))
-    }
-}
-
-impl RenderCache for DirectoryRenderCache {
-    fn store_chunk(&self, coords: CCoords, image: &RgbaImage) -> anyhow::Result<()> {
-        let path = self.chunk_path(coords);
-        let mut file = BufWriter::new(File::create(&path)?);
-        image.write_to(&mut file, image::ImageFormat::Png)?;
-        log::debug!("saved cached chunk to {:?}", &path);
-        Ok(())
-    }
-
-    fn load_chunk(&self, coords: CCoords) -> anyhow::Result<Option<RgbaImage>> {
-        let path = self.chunk_path(coords);
-        if !path.exists() {
-            return Ok(None);
-        }
-        let image = ImageReader::open(&path)?.decode()?;
-        log::debug!("loaded cached chunk from {:?}", &path);
-        Ok(Some(image.to_rgba8()))
-    }
-}
-
 pub struct Renderer<'s> {
     asset_cache: AssetCache<'s>,
-    render_cache: Box<dyn RenderCache>,
 }
 
 impl<'s> Renderer<'s> {
     pub fn new(asset_cache: AssetCache<'s>) -> Self {
-        Self {
-            asset_cache,
-            render_cache: Box::new(NoCache()),
-        }
-    }
-
-    pub fn set_render_cache(&mut self, render_cache: impl RenderCache + 'static) {
-        self.render_cache = Box::new(render_cache);
-    }
-
-    pub fn get_chunk(&mut self, raw_chunk: &RawChunk) -> anyhow::Result<RgbaImage> {
-        match self.render_cache.load_chunk(raw_chunk.coords) {
-            Ok(Some(image)) => {
-                return Ok(image);
-            }
-            Ok(None) => {}
-            Err(err) => {
-                return Err(err.into());
-            }
-        }
-        let image = self.render_chunk(raw_chunk)?;
-        self.render_cache.store_chunk(raw_chunk.coords, &image)?;
-        Ok(image)
+        Self { asset_cache }
     }
 
     #[tracing::instrument(skip_all, fields(coords = %raw_chunk.coords))]
-    fn render_chunk(&mut self, raw_chunk: &RawChunk) -> anyhow::Result<RgbaImage> {
+    pub fn render_chunk(&mut self, raw_chunk: &RawChunk) -> anyhow::Result<ImageBuf<Rgba8>> {
         let chunk = raw_chunk.parse()?;
         let mut output = ImageBuf::<Rgba8>::from_pixel(
             CHUNK_TILE_MAP.image_size.0 as usize,
@@ -157,16 +53,11 @@ impl<'s> Renderer<'s> {
                 CHUNK_TILE_MAP.tile_position(block.index.into(), BLOCK_COUNT_SINGLE);
             canvas::overlay_at(&mut output, &**asset, output_x as isize, output_y as isize);
         }
-        Ok(output.into())
-    }
-
-    pub fn get_region(&mut self, region_info: &RegionInfo) -> anyhow::Result<RgbaImage> {
-        // TODO: caching?
-        self.render_region(region_info)
+        Ok(output)
     }
 
     #[tracing::instrument(skip_all, fields(coords = %region_info.coords))]
-    pub fn render_region(&mut self, region_info: &RegionInfo) -> anyhow::Result<RgbaImage> {
+    pub fn render_region(&mut self, region_info: &RegionInfo) -> anyhow::Result<ImageBuf<Rgba8>> {
         let region = region_info.open()?;
         let mut output = ImageBuf::<Rgba8>::from_pixel(
             REGION_TILE_MAP.image_size.0 as usize,
@@ -175,8 +66,7 @@ impl<'s> Renderer<'s> {
         );
         for raw_chunk in region.into_iter() {
             let raw_chunk = raw_chunk?;
-            let chunk_output = self.get_chunk(&raw_chunk)?;
-            let chunk_wrapped = ImageBuf::from(&chunk_output);
+            let chunk_output = self.render_chunk(&raw_chunk)?;
             let (output_x, output_y) = REGION_TILE_MAP.tile_position(
                 PointXZY::new(
                     raw_chunk.index.x() * CHUNK_SIZE,
@@ -187,7 +77,7 @@ impl<'s> Renderer<'s> {
             );
             canvas::overlay_at(
                 &mut output,
-                &chunk_wrapped,
+                &chunk_output,
                 output_x as isize,
                 output_y as isize,
             );

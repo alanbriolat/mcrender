@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::canvas::{Image, ImageMut, Pixel, Rgba, TransmutablePixel, private};
+use crate::canvas::{Image, ImageMut, Pixel, Rgb, Rgba, TransmutablePixel, private};
 
 pub struct ImageBuf<P: Pixel, Container = Vec<<P as Pixel>::Subpixel>> {
     width: usize,
@@ -165,6 +165,28 @@ impl<'a> From<&'a mut image::RgbaImage> for ImageBuf<Rgba<u8>, &'a mut [u8]> {
             image.as_mut(),
         )
         .unwrap()
+    }
+}
+
+/// Adapt `ImageBuf` as image-rs `image::ImageBuffer` sharing the same underlying buffer.
+impl<'a, B> From<&'a ImageBuf<Rgb<u8>, B>> for image::ImageBuffer<image::Rgb<u8>, &'a [u8]>
+where
+    B: AsRef<[u8]>,
+{
+    fn from(image: &'a ImageBuf<Rgb<u8>, B>) -> Self {
+        image::ImageBuffer::from_raw(image.width as u32, image.height as u32, image.data.as_ref())
+            .unwrap()
+    }
+}
+
+/// Adapt `ImageBuf` as image-rs `image::ImageBuffer` sharing the same underlying buffer.
+impl<'a, B> From<&'a mut ImageBuf<Rgb<u8>, B>> for image::ImageBuffer<image::Rgb<u8>, &'a mut [u8]>
+where
+    B: AsMut<[u8]>,
+{
+    fn from(image: &'a mut ImageBuf<Rgb<u8>, B>) -> Self {
+        image::ImageBuffer::from_raw(image.width as u32, image.height as u32, image.data.as_mut())
+            .unwrap()
     }
 }
 
