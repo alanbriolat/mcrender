@@ -125,6 +125,18 @@ where
     fn pixel_rows(&self) -> impl Iterator<Item = &[Self::Pixel]> + '_ {
         self.pixels().chunks(self.width)
     }
+
+    fn raw_pixels(&self) -> &[Self::Pixel] {
+        self.pixels()
+    }
+
+    fn raw_pixel_offset(&self) -> usize {
+        0
+    }
+
+    fn raw_pixel_row_stride(&self) -> usize {
+        self.width
+    }
 }
 
 impl<P, Container> ImageMut for ImageBuf<P, Container>
@@ -141,6 +153,10 @@ where
             let end = i + self.width;
             &mut self.pixels_mut()[i..end]
         })
+    }
+
+    fn raw_pixels_mut(&mut self) -> &mut [Self::Pixel] {
+        self.pixels_mut()
     }
 }
 

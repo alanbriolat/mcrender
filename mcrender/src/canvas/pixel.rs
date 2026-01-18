@@ -74,6 +74,35 @@ pub unsafe trait TransmutablePixel: Pixel {
 #[repr(transparent)]
 pub struct Rgb<T: Subpixel>(pub [T; 3]);
 
+impl<T: Subpixel> Rgb<T> {
+    #[inline(always)]
+    pub fn to_rgba(self) -> Rgba<T> {
+        Rgba([self[0], self[1], self[2], T::MAX])
+    }
+}
+
+impl Rgb<u8> {
+    #[inline(always)]
+    pub fn to_f32(self) -> Rgb<f32> {
+        Rgb([
+            f32::from(self[0]) / 255.0,
+            f32::from(self[1]) / 255.0,
+            f32::from(self[2]) / 255.0,
+        ])
+    }
+}
+
+impl Rgb<f32> {
+    #[inline(always)]
+    pub fn to_u8(self) -> Rgb<u8> {
+        Rgb([
+            (self[0] * 255.0) as u8,
+            (self[1] * 255.0) as u8,
+            (self[2] * 255.0) as u8,
+        ])
+    }
+}
+
 impl<T: Subpixel> Deref for Rgb<T> {
     type Target = [T];
 
@@ -82,7 +111,7 @@ impl<T: Subpixel> Deref for Rgb<T> {
     }
 }
 
-impl DerefMut for Rgb<u8> {
+impl<T: Subpixel> DerefMut for Rgb<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
@@ -100,6 +129,37 @@ unsafe impl TransmutablePixel for Rgb<f32> {}
 #[repr(transparent)]
 pub struct Rgba<T: Subpixel>(pub [T; 4]);
 
+impl<T: Subpixel> Rgba<T> {
+    #[inline(always)]
+    pub fn to_rgb(self) -> Rgb<T> {
+        Rgb([self[0], self[1], self[2]])
+    }
+}
+
+impl Rgba<u8> {
+    #[inline(always)]
+    pub fn to_f32(self) -> Rgba<f32> {
+        Rgba([
+            f32::from(self[0]) / 255.0,
+            f32::from(self[1]) / 255.0,
+            f32::from(self[2]) / 255.0,
+            f32::from(self[3]) / 255.0,
+        ])
+    }
+}
+
+impl Rgba<f32> {
+    #[inline(always)]
+    pub fn to_u8(self) -> Rgba<u8> {
+        Rgba([
+            (self[0] * 255.0) as u8,
+            (self[1] * 255.0) as u8,
+            (self[2] * 255.0) as u8,
+            (self[3] * 255.0) as u8,
+        ])
+    }
+}
+
 impl<T: Subpixel> Deref for Rgba<T> {
     type Target = [T];
 
@@ -108,7 +168,7 @@ impl<T: Subpixel> Deref for Rgba<T> {
     }
 }
 
-impl DerefMut for Rgba<u8> {
+impl<T: Subpixel> DerefMut for Rgba<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }

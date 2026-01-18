@@ -16,32 +16,60 @@ pub type Rgba32f = Rgba<f32>;
 pub trait Image {
     type Pixel: Pixel;
 
+    /// Width of the image in pixels.
     fn width(&self) -> usize;
 
+    /// Height of the image in pixels.
     fn height(&self) -> usize;
 
+    /// Is `(x, y)` within the `(width, height)` bounds of the image?
     fn in_bounds(&self, x: usize, y: usize) -> bool {
         x < self.width() && y < self.height()
     }
 
+    /// Get the pixel at `(x, y)`, returning `None` if out of bounds.
     fn get_pixel(&self, x: usize, y: usize) -> Option<&Self::Pixel>;
 
+    /// Get the row of pixels at `y`, returning `None` if out of bounds.
     fn get_pixel_row(&self, y: usize) -> Option<&[Self::Pixel]>;
 
+    /// Iterate over the pixel row slices of the image.
     fn pixel_rows(&self) -> impl Iterator<Item = &[Self::Pixel]> + '_ {
-        (0..self.height()).map(|y| self.get_pixel_row(y).unwrap())
+        // (0..self.height()).map(|y| self.get_pixel_row(y).unwrap())
+        let pixels = self.raw_pixels();
+        let width = self.width();
+        let start = self.raw_pixel_offset();
+        let stride = self.raw_pixel_row_stride();
+        let end = start + stride * self.height();
+        (start..end)
+            .step_by(stride)
+            .map(move |i| &pixels[i..i + width])
     }
 
+    /// Get a view of the image at offset `(x, y)` and limited to `(width, height)`. The view will
+    /// be clamped to the valid bounds of the image.
     fn view(&self, left: usize, top: usize, width: usize, height: usize) -> ImageView<&Self> {
         ImageView::new(self, left, top, width, height)
     }
+
+    /// Get the underlying buffer as a slice of pixels, not taking into account view limits.
+    fn raw_pixels(&self) -> &[Self::Pixel];
+
+    /// The start of this image's pixels within [`Self::raw_pixels()`].
+    fn raw_pixel_offset(&self) -> usize;
+
+    /// The offset from `(x, y)` to `(x, y + 1)` within [`Self::raw_pixels()`].
+    fn raw_pixel_row_stride(&self) -> usize;
 }
 
 pub trait ImageMut: Image {
+    /// As [`Image::get_pixel()`], but mutable.
     fn get_pixel_mut(&mut self, x: usize, y: usize) -> Option<&mut Self::Pixel>;
 
+    /// As [`Image::get_pixel_row()`], but mutable.
     fn get_pixel_row_mut(&mut self, y: usize) -> Option<&mut [Self::Pixel]>;
 
+    /// As [`Image::view()`], but mutable.
     fn view_mut(
         &mut self,
         left: usize,
@@ -51,6 +79,9 @@ pub trait ImageMut: Image {
     ) -> ImageView<&mut Self> {
         ImageView::new(self, left, top, width, height)
     }
+
+    /// As [`Image::raw_pixels()`], but mutable.
+    fn raw_pixels_mut(&mut self) -> &mut [Self::Pixel];
 }
 
 #[cfg(test)]

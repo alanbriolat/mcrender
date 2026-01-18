@@ -1,6 +1,6 @@
 use std::cmp::min;
 
-use crate::canvas::{Image, ImageMut, Rgb, Rgba, Subpixel};
+use crate::canvas::{Image, ImageMut, Pixel, Rgb, Rgba, Subpixel};
 
 pub trait Overlay<P: ?Sized> {
     fn overlay(&mut self, src: &P);
@@ -59,7 +59,7 @@ impl<T: Subpixel> Overlay<Rgb<T>> for Rgba<T> {
     /// Overlay RGB onto RGBA: copy as if opaque.
     #[inline(always)]
     fn overlay(&mut self, src: &Rgb<T>) {
-        *self = [src[0], src[1], src[2], T::MAX].into();
+        *self = src.to_rgba();
     }
 }
 
@@ -109,48 +109,82 @@ impl Overlay<Rgba<u8>> for Rgba<u8> {
             *self = *src;
             return;
         }
-        // Otherwise, actually blend
 
-        // Convert to f32 and normalize to 0.0-1.0
-        let (bg_r, bg_g, bg_b, bg_a) = (
-            f32::from(self[0]) / 255.0,
-            f32::from(self[1]) / 255.0,
-            f32::from(self[2]) / 255.0,
-            f32::from(self[3]) / 255.0,
-        );
-        let (fg_r, fg_g, fg_b, fg_a) = (
-            f32::from(src[0]) / 255.0,
-            f32::from(src[1]) / 255.0,
-            f32::from(src[2]) / 255.0,
-            f32::from(src[3]) / 255.0,
-        );
+        // Otherwise, actually blend, as f32
+        let mut dst_f32 = self.to_f32();
+        let src_f32 = src.to_f32();
+        dst_f32.overlay(&src_f32);
+        *self = dst_f32.to_u8();
+    }
+}
 
-        // Calculate resulting alpha
-        let a = bg_a + fg_a - bg_a * fg_a;
-        if a == 0.0 {
-            // Resulting alpha would be 0, do nothing to avoid divide by 0 at the end
+/// Overlay RGBA onto RGB: use simpler method without `dst_a`.
+impl Overlay<Rgba<f32>> for Rgb<f32> {
+    fn overlay(&mut self, src: &Rgba<f32>) {
+        // Zero alpha = keep original pixel
+        if src[3] == 0.0 {
+            return;
+        }
+        // Max alpha = overwrite with new pixel
+        if src[3] == 1.0 {
+            *self = src.to_rgb();
             return;
         }
 
-        // src_rgb * src_a
-        let (fg_r, fg_g, fg_b) = (fg_r * fg_a, fg_g * fg_a, fg_b * fg_a);
+        // When dst_a = 1.0, and therefore out_a = 1.0, then
+        //      out_rgb * out_a = src_rgb * src_a + dst_rgb * dst_a * (1.0 - src_a)
+        //  ->  out_rgb * 1.0 = src_rgb * src_a + dst_rgb * 1.0 * (1.0 - src_a)
+        //  ->  out_rgb = src_rgb * src_a + dst_rgb * (1.0 - src_a)
+
+        // dst_rgb * (1.0 - src_a)
+        self[0] *= 1.0 - src[3];
+        self[1] *= 1.0 - src[3];
+        self[2] *= 1.0 - src[3];
+        // out_rgb = src_rgb * src_a + dst_rgb * (1.0 - src_a)
+        self[0] += src[0] * src[3];
+        self[1] += src[1] * src[3];
+        self[2] += src[2] * src[3];
+    }
+}
+
+/// Overlay RGBA onto RGBA: full blending with blended alpha.
+impl Overlay<Rgba<f32>> for Rgba<f32> {
+    fn overlay(&mut self, src: &Rgba<f32>) {
+        // Zero alpha = keep original pixel
+        if src[3] == 0.0 {
+            return;
+        }
+        // Max alpha = overwrite with new pixel
+        if src[3] == 1.0 {
+            *self = *src;
+            return;
+        }
+
+        // Calculate resulting alpha
+        let a = self[3] + src[3] - self[3] * src[3];
+        if a == 0.0 {
+            // Resulting alpha would be 0, do nothing to avoid divide-by-0 at the end
+            return;
+        }
+
         // dst_rgb * dst_a
-        let (bg_r, bg_g, bg_b) = (bg_r * bg_a, bg_g * bg_a, bg_b * bg_a);
+        self[0] *= self[3];
+        self[1] *= self[3];
+        self[2] *= self[3];
         // dst_rgb * dst_a * (1.0 - src_a)
-        let fg_a_inv = 1.0 - fg_a;
-        let (bg_r, bg_g, bg_b) = (bg_r * fg_a_inv, bg_g * fg_a_inv, bg_b * fg_a_inv);
-        // out_rgb * out_a = src_rgb * src_a + dst_rgb * (1.0 - src_a)
-        let (r, g, b) = (fg_r + bg_r, fg_g + bg_g, fg_b + bg_b);
-        // out_rgb, by dividing by out_a
-        let (r, g, b) = (r / a, g / a, b / a);
-        // Convert back to 0-255 range and back into u8
-        *self = [
-            (r * 255.0) as u8,
-            (g * 255.0) as u8,
-            (b * 255.0) as u8,
-            (a * 255.0) as u8,
-        ]
-        .into();
+        self[0] *= 1.0 - src[3];
+        self[1] *= 1.0 - src[3];
+        self[2] *= 1.0 - src[3];
+        // out_rgb * out_a = src_rgb * src_a + dst_rgb * dst_a * (1.0 - src_a)
+        self[0] += src[0] * src[3];
+        self[1] += src[1] * src[3];
+        self[2] += src[2] * src[3];
+        // out_rgb
+        self[0] /= a;
+        self[1] /= a;
+        self[2] /= a;
+        // out_a
+        self[3] = a;
     }
 }
 
@@ -165,10 +199,18 @@ where
 {
     let rows = min(dst.height(), src.height());
     let cols = min(dst.width(), src.width());
-    for y in 0..rows {
-        let own_row = &mut dst.get_pixel_row_mut(y).unwrap()[..cols];
-        let other_row = &src.get_pixel_row(y).unwrap()[..cols];
-        own_row.overlay(other_row);
+    let mut dst_offset = dst.raw_pixel_offset();
+    let dst_stride = dst.raw_pixel_row_stride();
+    let dst_pixels = &mut dst.raw_pixels_mut();
+    let mut src_offset = src.raw_pixel_offset();
+    let src_stride = src.raw_pixel_row_stride();
+    let src_pixels = &src.raw_pixels();
+
+    for _ in 0..rows {
+        dst_pixels[dst_offset..dst_offset + cols]
+            .overlay(&src_pixels[src_offset..src_offset + cols]);
+        dst_offset += dst_stride;
+        src_offset += src_stride;
     }
 }
 

@@ -93,6 +93,23 @@ where
             .get_pixel_row(y.saturating_add(self.top))
             .map(|row| &row[range])
     }
+
+    fn raw_pixels(&self) -> &[Self::Pixel] {
+        self.image.raw_pixels()
+    }
+
+    fn raw_pixel_offset(&self) -> usize {
+        // To the old offset, add:
+        //  - the old row stride for each row being skipped
+        //  - the offset into the start of the row
+        self.image.raw_pixel_offset() + self.image.raw_pixel_row_stride() * self.top + self.left
+    }
+
+    fn raw_pixel_row_stride(&self) -> usize {
+        // Row stride is unchanged, because down one row in a view is also down one row in the
+        // underlying raw buffer
+        self.image.raw_pixel_row_stride()
+    }
 }
 
 impl<I> ImageMut for ImageView<I>
@@ -110,5 +127,9 @@ where
         self.image
             .get_pixel_row_mut(y.saturating_add(self.top))
             .map(|row| &mut row[range])
+    }
+
+    fn raw_pixels_mut(&mut self) -> &mut [Self::Pixel] {
+        self.image.raw_pixels_mut()
     }
 }
