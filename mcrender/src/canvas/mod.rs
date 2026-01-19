@@ -1,10 +1,13 @@
+pub mod avx2;
 mod buffer;
 mod overlay;
 mod pixel;
+pub mod scalar;
+pub mod sse4;
 mod view;
 
 pub use buffer::ImageBuf;
-pub use overlay::{overlay, overlay_at};
+pub use overlay::{overlay, overlay_at, overlay_final, overlay_final_at};
 pub use pixel::*;
 pub use view::ImageView;
 

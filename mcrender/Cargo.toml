@@ -28,3 +28,7 @@ rand = "0.9.2"
 [[bench]]
 name = "proplist"
 harness = false
+
+[[bench]]
+name = "overlay"
+harness = false
