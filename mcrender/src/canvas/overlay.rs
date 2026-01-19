@@ -31,6 +31,7 @@ impl<T: Subpixel> Overlay<[Rgb<T>]> for [Rgba<T>] {
     #[inline(always)]
     fn overlay(&mut self, src: &[Rgb<T>]) {
         assert_eq!(self.len(), src.len());
+        // Accelerate this if it becomes something we commonly do...
         for (i, fg) in src.iter().enumerate() {
             self[i].overlay(fg);
         }
@@ -38,7 +39,7 @@ impl<T: Subpixel> Overlay<[Rgb<T>]> for [Rgba<T>] {
 }
 
 impl Overlay<[Rgba<u8>]> for [Rgb<u8>] {
-    /// Overlay RGBA onto RGB: use fast integer blending with opaque background.
+    /// Overlay RGBA onto RGB: always fast integer blending with opaque background.
     fn overlay(&mut self, src: &[Rgba<u8>]) {
         assert_eq!(self.len(), src.len());
         let n = if !DISABLE_AVX2 && is_x86_feature_detected!("avx2") {
@@ -59,11 +60,18 @@ impl Overlay<[Rgba<u8>]> for [Rgba<u8>] {
     /// Overlay RGBA onto RGBA: full blending with blended alpha.
     fn overlay(&mut self, src: &[Rgba<u8>]) {
         assert_eq!(self.len(), src.len());
-        for (i, fg) in src.iter().enumerate() {
-            self[i].overlay(fg);
+        let n = if !DISABLE_SSE4 && is_x86_feature_detected!("sse4.2") {
+            unsafe { sse4::rgba8_as_rgba32f_overlay(self, src) }
+        } else {
+            0
+        };
+        // Process any remainder that couldn't be vectorized
+        if n < self.len() {
+            scalar::rgba8_as_rgba32f_overlay(&mut self[n..], &src[n..]);
         }
     }
 
+    /// Overlay RGBA onto RGBA, ignoring destination alpha: use fast integer blending
     fn overlay_final(&mut self, src: &[Rgba<u8>]) {
         assert_eq!(self.len(), src.len());
         let n = if !DISABLE_AVX2 && is_x86_feature_detected!("avx2") {
@@ -128,6 +136,7 @@ impl Overlay<Rgba<u8>> for Rgba<u8> {
         *self = dst_f32.to_u8();
     }
 
+    /// Overlay RGBA onto RGBA, ignoring destination alpha: use fast integer blending
     #[inline]
     fn overlay_final(&mut self, src: &Rgba<u8>) {
         (self[0], self[1], self[2]) = blend_final_pixel_u8(
@@ -138,8 +147,8 @@ impl Overlay<Rgba<u8>> for Rgba<u8> {
     }
 }
 
-/// Overlay RGBA onto RGB: use simpler method without `dst_a`.
 impl Overlay<Rgba<f32>> for Rgb<f32> {
+    /// Overlay RGBA onto RGB: always use simpler method without `dst_a`.
     fn overlay(&mut self, src: &Rgba<f32>) {
         // Zero alpha = keep original pixel
         if src[3] == 0.0 {
@@ -167,8 +176,8 @@ impl Overlay<Rgba<f32>> for Rgb<f32> {
     }
 }
 
-/// Overlay RGBA onto RGBA: full blending with blended alpha.
 impl Overlay<Rgba<f32>> for Rgba<f32> {
+    /// Overlay RGBA onto RGBA: full blending with blended alpha.
     fn overlay(&mut self, src: &Rgba<f32>) {
         // Zero alpha = keep original pixel
         if src[3] == 0.0 {

@@ -6,6 +6,78 @@ use std::arch::x86_64::*;
 use crate::canvas::private::PrivateToken;
 use crate::canvas::{Rgb, Rgba, TransmutablePixel};
 
+/// Overlay RGBA onto RGBA, fully blended including blended alpha.
+///
+/// Assumes `src_pixels` is at least as long as `dst_pixels`. Returns the number of pixels
+/// processed, which for this implementation should be equal to `dst_pixels.len()`, since it
+/// processes one pixel at a time.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse4.2")]
+#[inline]
+pub fn rgba8_as_rgba32f_overlay(dst_pixels: &mut [Rgba<u8>], src_pixels: &[Rgba<u8>]) -> usize {
+    let one = _mm_set1_ps(1.0);
+    let scale_up = _mm_set1_ps(255.0);
+    // Simultaneously picks the 4 least-significant bytes and reorders from ARGB to RGBA
+    let shuffle_truncate = _mm_set1_epi32(0x000C0804);
+
+    let mut count = 0;
+    for i in 0..dst_pixels.len() {
+        count += 1;
+
+        // Zero alpha = keep original pixel
+        if src_pixels[i][3] == 0 {
+            continue;
+        }
+        // Max alpha = overwrite with new pixel
+        if src_pixels[i][3] == 255 {
+            dst_pixels[i] = src_pixels[i];
+            continue;
+        }
+
+        // Load next RGBA8 pixel for both dst and src
+        let dst = unsafe { _mm_loadu_si32(dst_pixels[i].as_ptr().cast()) };
+        let src = unsafe { _mm_loadu_si32(src_pixels[i].as_ptr().cast()) };
+        // Expand to 32-bit integers, and then convert to 32-bit floats
+        let dst = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(dst));
+        let src = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(src));
+        // Shuffle RGBA -> ARGB, to allow using _mm_move_ss later
+        let dst = _mm_shuffle_ps::<0b10_01_00_11>(dst, dst);
+        let src = _mm_shuffle_ps::<0b10_01_00_11>(src, src);
+        // Convert from 0-255 to 0.0-1.0 range
+        let dst = _mm_div_ps(dst, scale_up);
+        let src = _mm_div_ps(src, scale_up);
+        // Extract alpha values to multiply into other channels
+        let dst_a = _mm_shuffle_ps::<0b00_00_00_00>(dst, dst);
+        let src_a = _mm_shuffle_ps::<0b00_00_00_00>(src, src);
+        // Convert to "pre-multiplied alpha" form for RGB channels
+        let dst = _mm_mul_ps(dst, dst_a);
+        let src = _mm_mul_ps(src, src_a);
+        // Restore src_a and dst_a values, so that further operations give correct out_a
+        let dst = _mm_move_ss(dst, dst_a);
+        let src = _mm_move_ss(src, src_a);
+        // Multiply background channels by (1.0 - src_a)
+        let dst = _mm_mul_ps(dst, _mm_sub_ps(one, src_a));
+        // Combine dst_rgb + src_rgb and dst_a + src_a
+        let dst = _mm_add_ps(dst, src);
+        // Prepare vector to divide by final alpha (without affecting the alpha channel)
+        let out_a = _mm_move_ss(_mm_shuffle_ps::<0b00_00_00_00>(dst, dst), one);
+        // Divide by final alpha
+        // let dst = _mm_mul_ps(dst, _mm_rcp_ps(out_a));    // Would be faster, but is inaccurate
+        let dst = _mm_div_ps(dst, out_a);
+        // Convert from 0.0-1.0 to 0-255 range
+        let dst = _mm_mul_ps(dst, scale_up);
+        // Convert to 32-bit integers
+        let dst = _mm_cvttps_epi32(dst);
+        // Shuffle the LSBs of ARGB channels into RGBA8 format again
+        let dst = _mm_shuffle_epi8(dst, shuffle_truncate);
+        // Store back into the pixel
+        unsafe {
+            _mm_storeu_si32(dst_pixels[i].as_mut_ptr().cast(), dst);
+        };
+    }
+    count
+}
+
 /// Overlay RGBA onto RGBA, ignoring destination alpha channel.
 ///
 /// Assumes `src_pixels` is at least as long as `dst_pixels`. SSE4-accelerated implementation

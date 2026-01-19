@@ -1,17 +1,10 @@
-use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::BufWriter;
-use std::ops::Deref;
-use std::path::PathBuf;
-use std::sync::Mutex;
-
-use image::{ImageReader, RgbaImage};
+use std::convert::Into;
 
 use crate::asset::{AssetCache, SPRITE_SIZE};
 use crate::canvas;
-use crate::canvas::{ImageBuf, Rgba8};
+use crate::canvas::{ImageBuf, Rgb, Rgb8, Rgba, Rgba8};
 use crate::coords::{PointXZY, Vec2D};
-use crate::world::{CCoords, CHUNK_SIZE, REGION_SIZE, RawChunk, RegionInfo, WORLD_HEIGHT};
+use crate::world::{CHUNK_SIZE, REGION_SIZE, RawChunk, RegionInfo, WORLD_HEIGHT};
 
 const CHUNK_TILE_MAP: TileMap = TileMap::new(
     PointXZY::new(CHUNK_SIZE, CHUNK_SIZE, WORLD_HEIGHT),
@@ -32,18 +25,24 @@ pub struct Renderer<'s> {
     asset_cache: AssetCache<'s>,
 }
 
+pub type RenderOutput = ImageBuf<Rgba8>;
+const RENDER_OUTPUT_BG: Rgba8 = Rgba([0, 0, 0, 0]);
+// const RENDER_OUTPUT_BG: Rgba8 = Rgba([0, 0, 0, 255]);
+// pub type RenderOutput = ImageBuf<Rgb8>;
+// const RENDER_OUTPUT_BG: Rgb8 = Rgb([0, 0, 0]);
+
 impl<'s> Renderer<'s> {
     pub fn new(asset_cache: AssetCache<'s>) -> Self {
         Self { asset_cache }
     }
 
     #[tracing::instrument(skip_all, fields(coords = %raw_chunk.coords))]
-    pub fn render_chunk(&mut self, raw_chunk: &RawChunk) -> anyhow::Result<ImageBuf<Rgba8>> {
+    pub fn render_chunk(&mut self, raw_chunk: &RawChunk) -> anyhow::Result<RenderOutput> {
         let chunk = raw_chunk.parse()?;
-        let mut output = ImageBuf::<Rgba8>::from_pixel(
+        let mut output = ImageBuf::from_pixel(
             CHUNK_TILE_MAP.image_size.0 as usize,
             CHUNK_TILE_MAP.image_size.1 as usize,
-            [0, 0, 0, 0].into(),
+            RENDER_OUTPUT_BG,
         );
         for block in chunk.iter_blocks() {
             let Some(asset) = self.asset_cache.get_asset(&block) else {
@@ -52,17 +51,18 @@ impl<'s> Renderer<'s> {
             let (output_x, output_y) =
                 CHUNK_TILE_MAP.tile_position(block.index.into(), BLOCK_COUNT_SINGLE);
             canvas::overlay_at(&mut output, &**asset, output_x as isize, output_y as isize);
+            // canvas::overlay_final_at(&mut output, &**asset, output_x as isize, output_y as isize);
         }
         Ok(output)
     }
 
     #[tracing::instrument(skip_all, fields(coords = %region_info.coords))]
-    pub fn render_region(&mut self, region_info: &RegionInfo) -> anyhow::Result<ImageBuf<Rgba8>> {
+    pub fn render_region(&mut self, region_info: &RegionInfo) -> anyhow::Result<RenderOutput> {
         let region = region_info.open()?;
-        let mut output = ImageBuf::<Rgba8>::from_pixel(
+        let mut output = ImageBuf::from_pixel(
             REGION_TILE_MAP.image_size.0 as usize,
             REGION_TILE_MAP.image_size.1 as usize,
-            [0, 0, 0, 0].into(),
+            RENDER_OUTPUT_BG,
         );
         for raw_chunk in region.into_iter() {
             let raw_chunk = raw_chunk?;
@@ -76,6 +76,7 @@ impl<'s> Renderer<'s> {
                 BLOCK_COUNT_CHUNK,
             );
             canvas::overlay_at(
+            // canvas::overlay_final_at(
                 &mut output,
                 &chunk_output,
                 output_x as isize,
