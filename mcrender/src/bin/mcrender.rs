@@ -10,7 +10,9 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
+use mcrender::canvas::{Image, ImageBuf, ImageMut, Rgba8};
 use mcrender::render::Renderer;
+use mcrender::render2;
 use mcrender::settings::{Settings, convert_rgb};
 use mcrender::world::{BIndex, BlockRef, DimensionID, RCoords};
 
@@ -55,6 +57,10 @@ enum Commands {
         background: Option<Rgb<u8>>,
     },
     RenderTest {
+        source: PathBuf,
+        target: PathBuf,
+    },
+    RenderTest2 {
         source: PathBuf,
         target: PathBuf,
     },
@@ -167,7 +173,42 @@ fn main() -> Result<()> {
             output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
         }
 
-        // _ => unreachable!(),
+        Commands::RenderTest2 { source, target } => {
+            let renderer = render2::Renderer::new(&settings)?;
+            let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
+            log::debug!("world_info: {:?}", world_info);
+            let dim_info = world_info
+                .get_dimension(&DimensionID::Overworld)
+                .ok_or(anyhow!("no such dimension"))?;
+            let region_info = dim_info
+                .get_region(RCoords((0, 0).into()))
+                .ok_or(anyhow!("no such region"))?;
+            let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
+            let chunk = raw_chunk.parse()?;
+            let mut image = ImageBuf::<Rgba8>::from_pixel(
+                render2::SECTION_RENDER_WIDTH,
+                render2::SECTION_RENDER_HEIGHT + ((24 - 1) * render2::SECTION_RENDER_HEIGHT / 2),
+                [0, 0, 0, 255].into(),
+            );
+            let span = tracing::info_span!("render-test2-chunk");
+            span.in_scope(|| {
+                for (i, section) in chunk.sections.iter().enumerate() {
+                    let mut view = image.view_mut(
+                        0,
+                        image.height()
+                            - render2::SECTION_RENDER_HEIGHT
+                            - (i * render2::SECTION_RENDER_HEIGHT / 2),
+                        render2::SECTION_RENDER_WIDTH,
+                        render2::SECTION_RENDER_HEIGHT,
+                    );
+                    renderer.render_section(section, &mut view).unwrap();
+                }
+            });
+            log::info!("writing output to {:?}", target);
+            let output_image = ImageBuffer::from(&image);
+            let mut output_file = File::create(target)?;
+            output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
+        }
     }
 
     Ok(())

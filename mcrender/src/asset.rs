@@ -484,7 +484,7 @@ impl<'s> AssetCache<'s> {
             Face::Bottom => &self.projection_bottom,
             // _ => unreachable!(),
         };
-        let mut buffer = RgbaImage::new(SPRITE_SIZE, SPRITE_SIZE);
+        let mut buffer = RgbaImage::new(SPRITE_SIZE as u32, SPRITE_SIZE as u32);
         warp_into(
             texture,
             projection,
@@ -501,7 +501,7 @@ impl<'s> AssetCache<'s> {
     /// Render a simple plant, where in-game a single-texture is rendered in an X in the
     /// bottom-center of the block.
     fn render_plant(&self, texture: &RgbaImage) -> Sprite {
-        let mut buffer = RgbaImage::new(SPRITE_SIZE, SPRITE_SIZE);
+        let mut buffer = RgbaImage::new(SPRITE_SIZE as u32, SPRITE_SIZE as u32);
         let front_projection = flatten_projection([
             Projection::scale(1., 12. / 16.),
             Projection::translate(4., 6.),
@@ -585,9 +585,8 @@ fn tint_in_place(image: &mut RgbaImage, tint: Rgb<u8>) {
 //     }
 // }
 
-pub const SPRITE_SIZE: u32 = 24;
-const SPRITE_BUF_SIZE: usize =
-    SPRITE_SIZE as usize * SPRITE_SIZE as usize * <Rgba8 as Pixel>::CHANNELS;
+pub const SPRITE_SIZE: usize = 24;
+const SPRITE_BUF_SIZE: usize = SPRITE_SIZE * SPRITE_SIZE * <Rgba8 as Pixel>::CHANNELS;
 
 #[derive(derive_more::Deref, derive_more::DerefMut)]
 pub struct Sprite(ImageBuf<Rgba8, [u8; SPRITE_BUF_SIZE]>);
@@ -609,7 +608,7 @@ impl TryFrom<RgbaImage> for Sprite {
             let mut buf = [0; SPRITE_BUF_SIZE];
             buf.copy_from_slice(&samples[..SPRITE_BUF_SIZE]);
             Ok(Self(
-                ImageBuf::from_raw(SPRITE_SIZE as usize, SPRITE_SIZE as usize, buf).unwrap(),
+                ImageBuf::from_raw(SPRITE_SIZE, SPRITE_SIZE, buf).unwrap(),
             ))
         }
     }

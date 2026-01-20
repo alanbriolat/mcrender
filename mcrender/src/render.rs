@@ -8,7 +8,7 @@ use crate::world::{CHUNK_SIZE, REGION_SIZE, RawChunk, RegionInfo, WORLD_HEIGHT};
 
 const CHUNK_TILE_MAP: TileMap = TileMap::new(
     PointXZY::new(CHUNK_SIZE, CHUNK_SIZE, WORLD_HEIGHT),
-    SPRITE_SIZE,
+    SPRITE_SIZE as u32,
 );
 const REGION_TILE_MAP: TileMap = TileMap::new(
     PointXZY::new(
@@ -16,7 +16,7 @@ const REGION_TILE_MAP: TileMap = TileMap::new(
         CHUNK_SIZE * REGION_SIZE,
         WORLD_HEIGHT,
     ),
-    SPRITE_SIZE,
+    SPRITE_SIZE as u32,
 );
 const BLOCK_COUNT_SINGLE: PointXZY<u32> = PointXZY::new(1, 1, 1);
 const BLOCK_COUNT_CHUNK: PointXZY<u32> = PointXZY::new(CHUNK_SIZE, CHUNK_SIZE, WORLD_HEIGHT);
@@ -76,7 +76,7 @@ impl<'s> Renderer<'s> {
                 BLOCK_COUNT_CHUNK,
             );
             canvas::overlay_at(
-            // canvas::overlay_final_at(
+                // canvas::overlay_final_at(
                 &mut output,
                 &chunk_output,
                 output_x as isize,
