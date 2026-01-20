@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use config::builder::DefaultState;
@@ -266,22 +267,24 @@ impl<'de> Deserialize<'de> for ColorMap {
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
+    pub assets_path: PathBuf,
     pub asset_rules: AssetRules,
     pub biome_colors: BTreeMap<String, ColorMap>,
 }
 
 impl Settings {
-    pub fn config_builder() -> ConfigBuilder<DefaultState> {
-        Config::builder().add_source(File::from_str(
-            include_str!("settings_default.toml"),
-            FileFormat::Toml,
-        ))
+    pub fn config_builder(ignore_builtin: bool) -> ConfigBuilder<DefaultState> {
+        let mut builder = Config::builder();
+        if !ignore_builtin {
+            builder = builder.add_source(File::from_str(
+                include_str!("settings_default.toml"),
+                FileFormat::Toml,
+            ));
+        }
+        builder
     }
-    pub fn from_config(config: &Config) -> anyhow::Result<Settings> {
-        Ok(Settings {
-            asset_rules: config.get("asset_rules")?,
-            biome_colors: config.get("biome_colors")?,
-        })
+    pub fn from_config(config: Config) -> anyhow::Result<Settings> {
+        Ok(config.try_deserialize()?)
     }
 }
 

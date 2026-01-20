@@ -118,7 +118,8 @@ fn flatten_projection(projections: impl IntoIterator<Item = Projection>) -> Proj
 const BLOCK_TEXTURE_PATH: &str = "minecraft/textures/block";
 
 impl<'s> AssetCache<'s> {
-    pub fn new(path: PathBuf, settings: &'s Settings) -> anyhow::Result<AssetCache<'s>> {
+    pub fn new(settings: &'s Settings) -> anyhow::Result<AssetCache<'s>> {
+        let path = settings.assets_path.clone();
         if !path.is_dir() || !path.join(".mcassetsroot").exists() {
             Err(anyhow::anyhow!("not a minecraft assets dir"))
         } else {

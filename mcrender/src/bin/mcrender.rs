@@ -10,17 +10,25 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
-use mcrender::canvas::Image;
 use mcrender::render::Renderer;
 use mcrender::settings::{Settings, convert_rgb};
 use mcrender::world::{BIndex, BlockRef, DimensionID, RCoords};
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
+    /// Set `assets_path` configuration option
     #[arg(short, long)]
-    assets: PathBuf,
+    assets_path: Option<String>,
+    /// Disable color in log output
     #[arg(long, default_value_t = false)]
     no_color: bool,
+    /// Don't load builtin configuration
+    #[arg(long, default_value_t = false)]
+    no_builtin_config: bool,
+    /// Don't load configuration at ./mcrender.toml
+    #[arg(long, default_value_t = false)]
+    no_default_config: bool,
+    /// Load additional configuration files
     #[arg(short, long)]
     config: Vec<String>,
 
@@ -66,12 +74,27 @@ fn main() -> Result<()> {
         .init();
     log::debug!("args: {:?}", cli);
 
-    let mut builder = Settings::config_builder();
+    if cli.no_builtin_config {
+        log::warn!("ignoring built-in config");
+    } else {
+        log::info!("using built-in config");
+    }
+    let mut builder = Settings::config_builder(cli.no_builtin_config)
+        .set_override_option("assets_path", cli.assets_path)?;
+    if let Ok(true) = std::fs::exists("mcrender.toml") {
+        if cli.no_default_config {
+            log::warn!("ignoring default config: ./mcrender.toml");
+        } else {
+            log::info!("using default config: ./mcrender.toml");
+            builder = builder.add_source(config::File::new("mcrender.toml", FileFormat::Toml));
+        }
+    }
     for config_path in cli.config {
+        log::info!("using additional config: {}", &config_path);
         builder = builder.add_source(config::File::new(config_path.as_str(), FileFormat::Toml));
     }
     let config = builder.build()?;
-    let settings = Settings::from_config(&config)?;
+    let settings = Settings::from_config(config)?;
     // log::debug!("biome_colors: {:#?}", &settings.biome_colors);
     // log::debug!("asset_rules: {:#?}", &settings.asset_rules);
 
@@ -84,7 +107,7 @@ fn main() -> Result<()> {
             background,
             target,
         } => {
-            let mut asset_cache = AssetCache::new(cli.assets.clone(), &settings)?;
+            let asset_cache = AssetCache::new(&settings)?;
             let mut block_state = mcrender::world::BlockState::new(name.into());
             for raw_prop in prop.iter() {
                 let Some((key, value)) = raw_prop.split_once("=") else {
@@ -97,7 +120,6 @@ fn main() -> Result<()> {
                 state: &block_state,
                 biome,
             };
-            // TODO: biome
             let asset = asset_cache
                 .get_asset(&block_ref)
                 .ok_or(anyhow!("no such asset"))?;
@@ -121,7 +143,7 @@ fn main() -> Result<()> {
         }
 
         Commands::RenderTest { source, target } => {
-            let asset_cache = AssetCache::new(cli.assets, &settings)?;
+            let asset_cache = AssetCache::new(&settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
@@ -143,7 +165,9 @@ fn main() -> Result<()> {
             let output_image = ImageBuffer::from(&image);
             let mut output_file = File::create(target)?;
             output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
-        } // _ => unreachable!(),
+        }
+
+        // _ => unreachable!(),
     }
 
     Ok(())
