@@ -29,12 +29,20 @@ pub fn rgba8_overlay_final(dst_pixels: &mut [Rgba<u8>], src_pixels: &[Rgba<u8>])
     let alpha_mask = _mm256_set1_epi32(0xFF000000u32 as i32);
     let zero = _mm256_setzero_si256();
 
+    const CHUNK_LEN: usize = 8;
     let mut count = 0;
     // Process in chunks of 8 pixels (8 pixels * 4 channels of u8 = 32 bytes = 256 bits)
-    for i in (0..dst_pixels.len()).step_by(8) {
+    for (dst_chunk, src_chunk) in dst_pixels
+        .chunks_mut(CHUNK_LEN)
+        .zip(src_pixels.chunks(CHUNK_LEN))
+    {
+        if dst_chunk.len() < CHUNK_LEN {
+            break;
+        }
+        count += CHUNK_LEN;
         // Read chunk of both buffers
-        let dst = unsafe { _mm256_loadu_si256(dst_pixels[i..].as_ptr().cast()) };
-        let src = unsafe { _mm256_loadu_si256(src_pixels[i..].as_ptr().cast()) };
+        let dst = unsafe { _mm256_loadu_si256(dst_chunk.as_ptr().cast()) };
+        let src = unsafe { _mm256_loadu_si256(src_chunk.as_ptr().cast()) };
         // Duplicate src_a to all channels
         let src_a = _mm256_shuffle_epi8(src, alpha_shuffle);
         // Process low and high halves upcast from u8 to u16
@@ -56,9 +64,8 @@ pub fn rgba8_overlay_final(dst_pixels: &mut [Rgba<u8>], src_pixels: &[Rgba<u8>])
             _mm256_andnot_si256(alpha_mask, out),
         );
         unsafe {
-            _mm256_storeu_si256(dst_pixels[i..].as_mut_ptr().cast(), out);
+            _mm256_storeu_si256(dst_chunk.as_mut_ptr().cast(), out);
         }
-        count += 8;
     }
 
     count
@@ -114,21 +121,26 @@ pub fn rgba8_onto_rgb8_overlay(dst_pixels: &mut [Rgb<u8>], src_pixels: &[Rgba<u8
     );
     let zero = _mm256_setzero_si256();
 
+    const CHUNK_LEN: usize = 8;
     let mut count = 0;
     let mut dst_buf = [0u8; 32];
     // Process in chunks of 8 pixels (8 pixels * 4 channels of u8 = 32 bytes = 256 bits)
-    for i in (0..dst_pixels.len()).step_by(8) {
+    for (dst_chunk, src_chunk) in dst_pixels
+        .chunks_mut(CHUNK_LEN)
+        .zip(src_pixels.chunks(CHUNK_LEN))
+    {
+        if dst_chunk.len() < CHUNK_LEN {
+            break;
+        }
+        count += CHUNK_LEN;
         // Load dst chunk into middle of a register-sized buffer,
         // so we have ____ RGBR GBRG BRGB RGBR GBRG BRGB ____
-        dst_buf[4..28].copy_from_slice(Rgb::<u8>::channels_from_slice(
-            PrivateToken,
-            &dst_pixels[i..i + 8],
-        ));
+        dst_buf[4..28].copy_from_slice(Rgb::<u8>::channels_from_slice(PrivateToken, dst_chunk));
         let dst = unsafe { _mm256_loadu_si256(dst_buf.as_ptr().cast()) };
         // Shuffle RGB to RGBA format
         let dst = _mm256_shuffle_epi8(dst, pixel_shuffle);
         // Load src chunk directly
-        let src = unsafe { _mm256_loadu_si256(src_pixels[i..].as_ptr().cast()) };
+        let src = unsafe { _mm256_loadu_si256(src_chunk.as_ptr().cast()) };
         // Duplicate src_a to all channels
         let src_a = _mm256_shuffle_epi8(src, alpha_shuffle);
         // Process low and high halves upcast from u8 to u16
@@ -150,9 +162,8 @@ pub fn rgba8_onto_rgb8_overlay(dst_pixels: &mut [Rgb<u8>], src_pixels: &[Rgba<u8
             _mm256_storeu_si256(dst_buf.as_mut_ptr().cast(), out);
         }
         // Store middle of buffer over the pixels
-        Rgb::<u8>::channels_from_slice_mut(PrivateToken, &mut dst_pixels[i..i + 8])
+        Rgb::<u8>::channels_from_slice_mut(PrivateToken, dst_chunk)
             .copy_from_slice(&dst_buf[4..28]);
-        count += 8;
     }
 
     count
