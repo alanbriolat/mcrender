@@ -122,6 +122,12 @@ impl<T: Subpixel> Pixel for Rgb<T> {
     const CHANNELS: usize = 3;
 }
 
+impl From<Rgb<u8>> for image::Rgb<u8> {
+    fn from(rgb: Rgb<u8>) -> Self {
+        rgb.0.into()
+    }
+}
+
 unsafe impl TransmutablePixel for Rgb<u8> {}
 unsafe impl TransmutablePixel for Rgb<f32> {}
 
@@ -177,6 +183,12 @@ impl<T: Subpixel> DerefMut for Rgba<T> {
 impl<T: Subpixel> Pixel for Rgba<T> {
     type Subpixel = T;
     const CHANNELS: usize = 4;
+}
+
+impl From<Rgba<u8>> for image::Rgba<u8> {
+    fn from(rgba: Rgba<u8>) -> Self {
+        rgba.0.into()
+    }
 }
 
 unsafe impl TransmutablePixel for Rgba<u8> {}

@@ -1,20 +1,22 @@
 use std::fs::File;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use config::FileFormat;
 use image::imageops::FilterType;
-use image::{ImageBuffer, Rgb, Rgba, RgbaImage};
+use image::{ImageBuffer, Pixel, Rgba, RgbaImage};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
-use mcrender::canvas::{Image, ImageBuf, ImageMut, Rgba8};
+use mcrender::canvas::{Image, ImageBuf, ImageMut, Rgb8, Rgba8};
+use mcrender::coords::CoordsXZ;
 use mcrender::render::Renderer;
 use mcrender::render2;
 use mcrender::settings::{Settings, convert_rgb};
-use mcrender::world::{BIndex, BlockRef, DimensionID, RCoords};
+use mcrender::world::{BIndex, BlockRef, CCoords, DimensionID, RCoords};
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
@@ -54,21 +56,36 @@ enum Commands {
         scale: u32,
         /// Apply a solid background (to help with image bounds)
         #[arg(long, value_parser = parse_rgb_u8)]
-        background: Option<Rgb<u8>>,
+        background: Option<Rgb8>,
     },
-    RenderTest {
+    RenderRegion {
         source: PathBuf,
         target: PathBuf,
+        #[arg(long, value_parser = parse_coords_xz)]
+        coords: CoordsXZ,
+        // TODO: dimension
     },
-    RenderTest2 {
+    RenderChunk {
         source: PathBuf,
         target: PathBuf,
+        #[arg(long, default_value = "000000", value_parser = parse_rgb_u8)]
+        background: Rgb8,
+        #[arg(long, value_parser = parse_coords_xz)]
+        coords: CoordsXZ,
+        // TODO: dimension
     },
 }
 
-fn parse_rgb_u8(s: &str) -> Result<Rgb<u8>, String> {
+fn parse_rgb_u8(s: &str) -> Result<Rgb8, String> {
     let value = u32::from_str_radix(s, 16).map_err(|err| err.to_string())?;
     Ok(convert_rgb(value))
+}
+
+fn parse_coords_xz(s: &str) -> Result<CoordsXZ, String> {
+    let (raw_x, raw_z) = s.split_once(',').ok_or("expected x,z format")?;
+    let x = i32::from_str(raw_x).map_err(|err| err.to_string())?;
+    let z = i32::from_str(raw_z).map_err(|err| err.to_string())?;
+    Ok(CoordsXZ::new(x, z))
 }
 
 fn main() -> Result<()> {
@@ -148,61 +165,51 @@ fn main() -> Result<()> {
             image.write_to(&mut output_file, image::ImageFormat::Png)?;
         }
 
-        Commands::RenderTest { source, target } => {
+        Commands::RenderRegion {
+            source,
+            target,
+            coords,
+        } => {
             let asset_cache = AssetCache::new(&settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            // log::debug!("dim_info: {:?}", dim_info);
             let region_info = dim_info
-                .get_region(RCoords((0, 0).into()))
+                .get_region(RCoords(*coords))
                 .ok_or(anyhow!("no such region"))?;
-            // log::debug!("region_info: {:?}", region_info);
-            let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
-            // log::debug!("raw_chunk: {:?}", raw_chunk);
-            let chunk = raw_chunk.parse()?;
-            // log::debug!("chunk: {:?}", chunk);
             let mut renderer = Renderer::new(asset_cache);
-            let image = renderer.render_chunk(&raw_chunk)?;
-            // let image = renderer.render_region(&region_info)?;
-
+            let image = renderer.render_region(&region_info)?;
             let output_image = ImageBuffer::from(&image);
             let mut output_file = File::create(target)?;
             output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
         }
 
-        Commands::RenderTest2 { source, target } => {
+        Commands::RenderChunk {
+            source,
+            target,
+            background,
+            coords,
+        } => {
             let renderer = render2::Renderer::new(&settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let region_info = dim_info
-                .get_region(RCoords((0, 0).into()))
-                .ok_or(anyhow!("no such region"))?;
-            let raw_chunk = region_info.open()?.into_iter().next().unwrap()?;
+            let raw_chunk = dim_info
+                .get_raw_chunk(CCoords(*coords))?
+                .ok_or(anyhow!("no such chunk"))?;
             let chunk = raw_chunk.parse()?;
             let mut image = ImageBuf::<Rgba8>::from_pixel(
-                render2::SECTION_RENDER_WIDTH,
-                render2::SECTION_RENDER_HEIGHT + ((24 - 1) * render2::SECTION_RENDER_HEIGHT / 2),
-                [0, 0, 0, 255].into(),
+                render2::CHUNK_RENDER_WIDTH,
+                render2::CHUNK_RENDER_HEIGHT,
+                background.to_rgba(),
             );
             let span = tracing::info_span!("render-test2-chunk");
             span.in_scope(|| {
-                for (i, section) in chunk.sections.iter().enumerate() {
-                    let mut view = image.view_mut(
-                        0,
-                        image.height()
-                            - render2::SECTION_RENDER_HEIGHT
-                            - (i * render2::SECTION_RENDER_HEIGHT / 2),
-                        render2::SECTION_RENDER_WIDTH,
-                        render2::SECTION_RENDER_HEIGHT,
-                    );
-                    renderer.render_section(section, &mut view).unwrap();
-                }
+                renderer.render_chunk_at(&chunk, &mut image, 0, 0).unwrap();
             });
             log::info!("writing output to {:?}", target);
             let output_image = ImageBuffer::from(&image);

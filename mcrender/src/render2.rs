@@ -3,7 +3,7 @@ use crate::canvas;
 use crate::canvas::{ImageMut, Overlay, Rgba8};
 use crate::coords::{PointXZY, Vec2D};
 use crate::settings::Settings;
-use crate::world::{CHUNK_SIZE, Section};
+use crate::world::{CHUNK_SIZE, Chunk, Section, WORLD_HEIGHT};
 
 /// The image width required to fully render a chunk section (16x16x16 blocks).
 ///
@@ -13,9 +13,19 @@ pub const SECTION_RENDER_WIDTH: usize = SPRITE_SIZE * CHUNK_SIZE as usize;
 /// The image height required to fully render a chunk section.
 ///
 /// In isometric view, this is the top-to-bottom diagonal across the top of the chunk, plus the
-/// vertical down the side of the chunk, which are both half the sprite height multiplied by number
+/// vertical down the side of the section, which are both half the sprite height multiplied by number
 /// of blocks diagonally/vertically respectively.
 pub const SECTION_RENDER_HEIGHT: usize = (SPRITE_SIZE / 2) * (2 * CHUNK_SIZE as usize);
+
+/// The image width required to fully render a chunk. The same as for a section.
+pub const CHUNK_RENDER_WIDTH: usize = SECTION_RENDER_WIDTH;
+/// The image height required to fully render a chunk (16x16x384 blocks).
+///
+/// This is the top-to-bottom diagonal across the top of the chunk (half the sprite height times the
+/// number of blocks diagonally), plus the vertical down the side (half the sprite height times the
+/// number of blocks vertically).
+pub const CHUNK_RENDER_HEIGHT: usize =
+    (SPRITE_SIZE / 2) * (CHUNK_SIZE as usize + WORLD_HEIGHT as usize);
 
 /// Within the space required to render a chunk section, the offset at which a sprite for the
 /// block at `(0, 0, 0)` in section-relative coordinates would be rendered.
@@ -48,22 +58,59 @@ impl<'s> Renderer<'s> {
         })
     }
 
-    pub fn render_section<I>(&self, section: &Section, output: &mut I) -> anyhow::Result<()>
+    pub fn render_section_at<I>(
+        &self,
+        section: &Section,
+        output: &mut I,
+        x: isize,
+        y: isize,
+    ) -> anyhow::Result<()>
     where
         I: ImageMut,
         [I::Pixel]: Overlay<[Rgba8]>,
     {
         for block in section.iter_blocks() {
+            // Calculate where the sprite for the block would render
+            let start = SECTION_ORIGIN
+                + SECTION_OFFSET_X * block.index.x() as isize
+                + SECTION_OFFSET_Z * block.index.z() as isize
+                + SECTION_OFFSET_Y * block.index.y() as isize
+                + Vec2D(x, y);
+            let end = start + Vec2D(SPRITE_SIZE as isize, SPRITE_SIZE as isize);
+            // Skip the block if it would be entirely out-of-bounds
+            if end.0 <= 0
+                || end.1 <= 0
+                || start.0 >= output.width() as isize
+                || start.1 >= output.height() as isize
+            {
+                continue;
+            }
+            // Try to get a sprite to render for the block
             let Some(asset) = self.asset_cache.get_asset(&block) else {
                 continue;
             };
-            let pos = SECTION_ORIGIN
-                + SECTION_OFFSET_X * block.index.x() as isize
-                + SECTION_OFFSET_Z * block.index.z() as isize
-                + SECTION_OFFSET_Y * block.index.y() as isize;
-            canvas::overlay_final_at(output, &**asset, pos.0, pos.1);
+            // Render the sprite into the correct position
+            canvas::overlay_final_at(output, &**asset, start.0, start.1);
         }
+        Ok(())
+    }
 
+    pub fn render_chunk_at<I>(
+        &self,
+        chunk: &Chunk,
+        output: &mut I,
+        x: isize,
+        y: isize,
+    ) -> anyhow::Result<()>
+    where
+        I: ImageMut,
+        [I::Pixel]: Overlay<[Rgba8]>,
+    {
+        for (i, section) in chunk.sections.iter().enumerate() {
+            let y_offset =
+                CHUNK_RENDER_HEIGHT - SECTION_RENDER_HEIGHT - (i * SECTION_RENDER_HEIGHT / 2);
+            self.render_section_at(section, output, x, y + y_offset as isize)?;
+        }
         Ok(())
     }
 }

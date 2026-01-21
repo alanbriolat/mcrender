@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use image::imageops::overlay;
-use image::{GenericImageView, Rgb, Rgba, RgbaImage};
+use image::{GenericImageView, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
 use crate::canvas;
-use crate::canvas::{Image, ImageBuf, Pixel, Rgba8};
+use crate::canvas::{Image, ImageBuf, Pixel, Rgb, Rgba, Rgba8};
 use crate::proplist::DefaultPropList as PropList;
 use crate::settings::{AssetRenderSpec, Settings};
 use crate::world::BlockRef;
@@ -405,7 +405,7 @@ impl<'s> AssetCache<'s> {
         tint_color: Rgb<u8>,
     ) -> anyhow::Result<Option<Sprite>> {
         // let mut texture = (*self.get_block_texture("water_still")?).clone();
-        let mut texture = RgbaImage::from_pixel(16, 16, Rgba([255, 255, 255, 120]));
+        let mut texture = RgbaImage::from_pixel(16, 16, [255, 255, 255, 120].into());
         tint_in_place(&mut texture, tint_color);
         let block_tints = if let Some("true") = info.get_property("falling") {
             &TINT_BLOCK_3D
@@ -489,7 +489,7 @@ impl<'s> AssetCache<'s> {
             texture,
             projection,
             Interpolation::Bilinear,
-            Rgba([0, 0, 0, 0]),
+            [0, 0, 0, 0].into(),
             &mut buffer,
         );
         if let Some(tint_color) = tint {
@@ -510,7 +510,7 @@ impl<'s> AssetCache<'s> {
             texture,
             &front_projection,
             Interpolation::Nearest,
-            Rgba([0, 0, 0, 0]),
+            [0, 0, 0, 0].into(),
             &mut buffer,
         );
         Sprite::try_from(buffer).unwrap()

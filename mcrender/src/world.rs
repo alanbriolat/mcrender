@@ -4,7 +4,7 @@ Anvil file format notes:
 - A region's chunk offset table is ordered by (Z, X).
 - A chunk's blocks are ordered by (Y, Z, X).
  */
-use std::cmp::max;
+use std::cmp::{max, min};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -65,6 +65,12 @@ pub enum DimensionID {
     derive_more::MulAssign,
 )]
 pub struct RCoords(pub CoordsXZ);
+
+impl RCoords {
+    pub fn to_chunk_coords(self) -> CCoords {
+        CCoords((self.x() * REGION_SIZE as i32, self.z() * REGION_SIZE as i32).into())
+    }
+}
 
 /// Global chunk coordinates.
 #[derive(
@@ -147,6 +153,15 @@ impl CIndex {
             )
                 .into(),
         )
+    }
+
+    fn to_flat_index(self) -> usize {
+        (self.z() * REGION_SIZE + self.x()) as usize
+    }
+
+    fn from_flat_index(index: usize) -> Self {
+        assert!(index < (REGION_SIZE * REGION_SIZE) as usize);
+        Self((index as u32 % REGION_SIZE, index as u32 / REGION_SIZE).into())
     }
 }
 
@@ -242,16 +257,56 @@ impl DimensionInfo {
             return Err(anyhow!("not a dimension directory"));
         }
         let mut regions = BTreeMap::new();
-        for entry in fs::read_dir(regions_path).unwrap() {
+        for entry in fs::read_dir(regions_path)? {
             if let Ok(region) = RegionInfo::try_from_path(entry?.path()) {
                 regions.insert(region.coords, region);
             }
+        }
+        if regions.len() == 0 {
+            return Err(anyhow!("no regions found"));
         }
         Ok(Self { path, regions })
     }
 
     pub fn get_region(&self, region_coords: RCoords) -> Option<&RegionInfo> {
         self.regions.get(&region_coords)
+    }
+
+    /// Get region coordinates such that all existing regions have coordinates `X >= min.x()` and `Z >= min.z()`.
+    pub fn min_region_coords(&self) -> RCoords {
+        self.regions
+            .keys()
+            .cloned()
+            .reduce(|acc, k| RCoords((min(acc.x(), k.x()), min(acc.z(), k.z())).into()))
+            .unwrap()
+    }
+
+    /// Get region coordinates such that all existing regions have coordinates `X < max.x()` and `Z < max.z()`.
+    pub fn max_region_coords(&self) -> RCoords {
+        RCoords((1, 1).into())
+            + self
+                .regions
+                .keys()
+                .cloned()
+                .reduce(|acc, k| RCoords((max(acc.x(), k.x()), max(acc.z(), k.z())).into()))
+                .unwrap()
+    }
+
+    /// Get the raw chunk at `chunk_coords`, if such a chunk has data.
+    pub fn get_raw_chunk(&self, chunk_coords: CCoords) -> anyhow::Result<Option<RawChunk>> {
+        let (region_coords, chunk_index) = chunk_coords.to_region_coords();
+        let Some(region_info) = self.regions.get(&region_coords) else {
+            // No such region
+            return Ok(None);
+        };
+        // TODO: cache open regions
+        let mut region = region_info.open()?;
+        let Some(mut raw_chunk) = region.get_raw_chunk(chunk_index)? else {
+            // No chunk data for this chunk
+            return Ok(None);
+        };
+        raw_chunk.coords = raw_chunk.index.to_chunk_coords(region_coords);
+        Ok(Some(raw_chunk))
     }
 }
 
@@ -322,7 +377,7 @@ impl<S: Read + Seek> Region<S> {
     pub fn into_iter(self) -> RegionChunkIter<S> {
         RegionChunkIter {
             region: self,
-            index_iter: 0..REGION_CHUNK_COUNT as u32,
+            index_iter: 0..REGION_CHUNK_COUNT,
         }
     }
 
@@ -330,8 +385,17 @@ impl<S: Read + Seek> Region<S> {
         &self.info
     }
 
-    fn read_chunk_data(&mut self, index: u32) -> anyhow::Result<Option<Vec<u8>>> {
-        let offset_count = self.chunks[index as usize];
+    pub fn get_raw_chunk(&mut self, chunk_index: CIndex) -> anyhow::Result<Option<RawChunk>> {
+        let Some(mut raw_chunk) = self.get_raw_chunk_by_index(chunk_index.to_flat_index())? else {
+            return Ok(None);
+        };
+        raw_chunk.index = chunk_index;
+        Ok(Some(raw_chunk))
+    }
+
+    fn get_raw_chunk_by_index(&mut self, index: usize) -> anyhow::Result<Option<RawChunk>> {
+        assert!(index < self.chunks.len());
+        let offset_count = self.chunks[index];
         // Offset of 0 means there is no chunk data for this chunk
         if offset_count == 0 {
             return Ok(None);
@@ -358,13 +422,18 @@ impl<S: Read + Seek> Region<S> {
         let mut chunk_decoder = flate2::write::ZlibDecoder::new(vec![]);
         io::copy(&mut chunk_reader, &mut chunk_decoder)?;
         let chunk_data = chunk_decoder.finish()?;
-        Ok(Some(chunk_data))
+
+        Ok(Some(RawChunk {
+            data: chunk_data,
+            index: Default::default(),
+            coords: Default::default(),
+        }))
     }
 }
 
 pub struct RegionChunkIter<S: Read + Seek> {
     region: Region<S>,
-    index_iter: Range<u32>,
+    index_iter: Range<usize>,
 }
 
 impl<S: Read + Seek> RegionChunkIter<S> {
@@ -377,16 +446,12 @@ impl<S: Read + Seek> Iterator for RegionChunkIter<S> {
     type Item = anyhow::Result<RawChunk>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(index) = self.index_iter.next() {
-            match self.region.read_chunk_data(index) {
-                Ok(Some(data)) => {
-                    let index = CIndex((index % 32, index / 32).into());
-                    let coords = index.to_chunk_coords(self.region.info.coords);
-                    return Some(Ok(RawChunk {
-                        index,
-                        coords,
-                        data,
-                    }));
+        while let Some(i) = self.index_iter.next() {
+            match self.region.get_raw_chunk_by_index(i) {
+                Ok(Some(mut raw_chunk)) => {
+                    raw_chunk.index = CIndex::from_flat_index(i);
+                    raw_chunk.coords = raw_chunk.index.to_chunk_coords(self.region.info.coords);
+                    return Some(Ok(raw_chunk));
                 }
                 Ok(None) => continue,
                 Err(e) => return Some(Err(e)),

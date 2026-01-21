@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use config::builder::DefaultState;
 use config::{Config, ConfigBuilder, File, FileFormat};
-use image::Rgb;
 use serde::{Deserialize, Deserializer};
 
 use crate::asset::AssetInfo;
+use crate::canvas::Rgb;
 use crate::world::BlockRef;
 
 #[derive(Debug, Deserialize)]
