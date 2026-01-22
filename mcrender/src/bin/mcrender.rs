@@ -16,6 +16,7 @@ use mcrender::canvas::{ImageBuf, Rgb8, Rgba8};
 use mcrender::coords::CoordsXZ;
 use mcrender::render::Renderer;
 use mcrender::render2;
+use mcrender::render2::MapRenderer;
 use mcrender::settings::{Settings, convert_rgb};
 use mcrender::world::{BIndex, BlockRef, CCoords, DimensionID, RCoords};
 
@@ -237,15 +238,27 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
+            let map_renderer = MapRenderer::new(dim_info, renderer, *background);
             // TODO: make blank-tile.png using background color
-            for (i, (row, col, image)) in renderer.render_tiles(dim_info, *background).enumerate() {
-                let tile_target = target_dir.join(format!("{col}/{row}.png"));
-                let tile_target_dir = tile_target.parent().unwrap();
-                fs::create_dir_all(&tile_target_dir)?;
-                let output_image = ImageBuffer::from(&image);
-                log::debug!("writing tile ({col},{row}) to {:?}", &tile_target);
-                let mut output_file = File::create(tile_target)?;
-                output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
+            // TODO: parallelize rendering columns
+            for col in map_renderer.col_range() {
+                map_renderer.render_column(col, |coords, image| {
+                    let tile_target = target_dir.join(format!("{}/{}.png", coords.0, coords.1));
+                    let tile_target_dir = tile_target.parent().unwrap();
+                    log::info!(
+                        "writing tile ({}, {}) to {:?}",
+                        coords.0,
+                        coords.1,
+                        &tile_target
+                    );
+                    fs::create_dir_all(&tile_target_dir).unwrap();
+                    let output_image = ImageBuffer::from(image);
+                    let mut output_file = File::create(tile_target).unwrap();
+                    output_image
+                        .write_to(&mut output_file, image::ImageFormat::Png)
+                        .unwrap();
+                    true
+                })?;
             }
         }
     }

@@ -1,7 +1,9 @@
+use std::ops::RangeInclusive;
+
 use crate::asset::{AssetCache, SPRITE_SIZE};
 use crate::canvas;
-use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgb8, Rgba, Rgba8};
-use crate::coords::{CoordsXZ, PointXZY, Vec2D};
+use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgb8, Rgba8};
+use crate::coords::{CoordsXZ, Vec2D};
 use crate::settings::Settings;
 use crate::world::{CCoords, CHUNK_SIZE, Chunk, DimensionInfo, Section, WORLD_HEIGHT};
 
@@ -125,17 +127,33 @@ impl<'s> Renderer<'s> {
         }
         Ok(())
     }
+}
 
-    pub fn render_tiles(
-        &self,
-        dim_info: &DimensionInfo,
-        background: Rgb8,
-    ) -> impl Iterator<Item = (isize, isize, ImageBuf<Rgba8>)> {
-        const BUFFER_WIDTH: usize = CHUNK_RENDER_WIDTH;
-        const BUFFER_HEIGHT: usize = CHUNK_RENDER_HEIGHT + 3 * (SECTION_RENDER_HEIGHT / 4);
-        const BUFFER_LEN_PIXELS: usize = BUFFER_WIDTH * BUFFER_HEIGHT;
-        const BUFFER_SPLIT_PIXELS: usize = BUFFER_WIDTH * SECTION_RENDER_HEIGHT;
-        const BUFFER_SPLIT_CHANNELS: usize = BUFFER_SPLIT_PIXELS * <Rgba8 as Pixel>::CHANNELS;
+const TILE_BUFFER_WIDTH: usize = CHUNK_RENDER_WIDTH;
+const TILE_BUFFER_HEIGHT: usize = CHUNK_RENDER_HEIGHT + 3 * (SECTION_RENDER_HEIGHT / 4);
+const TILE_BUFFER_LEN_PIXELS: usize = TILE_BUFFER_WIDTH * TILE_BUFFER_HEIGHT;
+const TILE_BUFFER_SPLIT_PIXELS: usize = TILE_BUFFER_WIDTH * SECTION_RENDER_HEIGHT;
+const TILE_BUFFER_SPLIT_CHANNELS: usize = TILE_BUFFER_SPLIT_PIXELS * <Rgba8 as Pixel>::CHANNELS;
+
+const TILE_RENDER_CHUNK_OFFSETS: [CoordsXZ; 6] = [
+    CoordsXZ::new(0, 0),
+    CoordsXZ::new(1, 0),
+    CoordsXZ::new(0, 1),
+    CoordsXZ::new(1, 1),
+    CoordsXZ::new(2, 1),
+    CoordsXZ::new(1, 2),
+];
+
+pub struct MapRenderer<'i, 's> {
+    dim_info: &'i DimensionInfo,
+    renderer: Renderer<'s>,
+    background: Rgba8,
+    col_range: RangeInclusive<i32>,
+    row_range: RangeInclusive<i32>,
+}
+
+impl<'i, 's> MapRenderer<'i, 's> {
+    pub fn new(dim_info: &'i DimensionInfo, renderer: Renderer<'s>, background: Rgb8) -> Self {
         let background = background.to_rgba();
         let min_chunk = dim_info.min_region_coords().to_chunk_coords();
         let max_chunk = dim_info.max_region_coords().to_chunk_coords();
@@ -145,55 +163,78 @@ impl<'s> Renderer<'s> {
             + (CHUNK_RENDER_HEIGHT / SECTION_RENDER_HEIGHT) as i32;
         let min_col = (min_chunk.x() - max_chunk.z()) / 2;
         let max_col = (max_chunk.x() - min_chunk.z()) / 2;
-        log::debug!(
-            "map tile extent: ({}, {}) to ({}, {})",
-            min_col,
-            min_row,
-            max_col,
-            max_row
-        );
-        (min_col..=max_col).flat_map(move |col| {
-            let mut buffer = ImageBuf::<Rgba8>::from_pixel(BUFFER_WIDTH, BUFFER_HEIGHT, background);
-            (min_row..=max_row).map(move |row| {
-                // Figure out the chunk coords of the next 6 chunks that need to be rendered
-                // to cover the next tile down the column
-                let anchor = CoordsXZ::new(2 * row + col, 2 * row - col);
-                let offsets: [CoordsXZ; _] = [
-                    (0, 0).into(),
-                    (1, 0).into(),
-                    (0, 1).into(),
-                    (1, 1).into(),
-                    (2, 1).into(),
-                    (1, 2).into(),
-                ];
-                // Render each chunk of the 6 chunks, if they exist
-                for offset in offsets {
-                    let image_offset =
-                        CHUNK_OFFSET_X * offset.x() as isize + CHUNK_OFFSET_Z * offset.z() as isize;
-                    let coords = anchor + offset;
-                    let Some(raw_chunk) = dim_info.get_raw_chunk(CCoords(coords)).unwrap() else {
-                        continue;
-                    };
-                    let Ok(chunk) = raw_chunk.parse() else {
-                        log::error!("failed to parse chunk {coords}");
-                        continue;
-                    };
-                    self.render_chunk_at(&chunk, &mut buffer, image_offset.0, image_offset.1)
-                        .unwrap();
-                }
-                // TODO: optimise out tiles that don't show anything
-                // Create tile image from top section of buffer
-                let raw = Vec::from(&buffer.channels()[0..BUFFER_SPLIT_CHANNELS]);
-                let image =
-                    ImageBuf::from_raw(SECTION_RENDER_WIDTH, SECTION_RENDER_HEIGHT, raw).unwrap();
-                // Shift the buffer up to prepare for next tile down
-                buffer
-                    .channels_mut()
-                    .copy_within(BUFFER_SPLIT_CHANNELS.., 0);
-                buffer.pixels_mut()[BUFFER_LEN_PIXELS - BUFFER_SPLIT_PIXELS..].fill(background);
-                // Yield the tile and its coordinates
-                (row as isize, col as isize, image)
-            })
-        })
+
+        Self {
+            dim_info,
+            renderer,
+            background,
+            col_range: min_col..=max_col,
+            row_range: min_row..=max_row,
+        }
+    }
+
+    pub fn col_range(&self) -> RangeInclusive<i32> {
+        self.col_range.clone()
+    }
+
+    pub fn row_range(&self) -> RangeInclusive<i32> {
+        self.row_range.clone()
+    }
+
+    /// Consume the `MapRenderer` and return the wrapped `Renderer`.
+    pub fn into_renderer(self) -> Renderer<'s> {
+        self.renderer
+    }
+
+    pub fn render_column<F>(&self, col: i32, f: F) -> anyhow::Result<()>
+    where
+        F: Fn(Vec2D<i32>, &ImageBuf<Rgba8, &[u8]>) -> bool,
+    {
+        let mut buffer =
+            ImageBuf::<Rgba8>::from_pixel(TILE_BUFFER_WIDTH, TILE_BUFFER_HEIGHT, self.background);
+
+        for row in self.row_range() {
+            // Figure out the chunk coords of the next 6 chunks that need to be rendered
+            // to cover the next tile down the column, and render them if they exist
+            let anchor = CoordsXZ::new(2 * row + col, 2 * row - col);
+            for offset in TILE_RENDER_CHUNK_OFFSETS.iter().copied() {
+                let image_offset =
+                    CHUNK_OFFSET_X * offset.x() as isize + CHUNK_OFFSET_Z * offset.z() as isize;
+                let coords = anchor + offset;
+                let Some(raw_chunk) = self.dim_info.get_raw_chunk(CCoords(coords)).unwrap() else {
+                    continue;
+                };
+                let Ok(chunk) = raw_chunk.parse() else {
+                    log::error!("failed to parse chunk {coords}");
+                    continue;
+                };
+                self.renderer
+                    .render_chunk_at(&chunk, &mut buffer, image_offset.0, image_offset.1)
+                    .unwrap();
+            }
+
+            // TODO: optimise out tiles that don't show anything
+            // Create tile image from top section of buffer
+            let image = ImageBuf::from_raw(
+                TILE_BUFFER_WIDTH,
+                SECTION_RENDER_HEIGHT,
+                &buffer.channels()[..TILE_BUFFER_SPLIT_CHANNELS],
+            )
+            .unwrap();
+            // Pass the tile to the callback
+            let keep_rendering = f((col, row).into(), &image);
+            if !keep_rendering {
+                // Stop rendering if the callback said they're done
+                break;
+            }
+            // Shift the buffer up to prepare for next tile down
+            buffer
+                .channels_mut()
+                .copy_within(TILE_BUFFER_SPLIT_CHANNELS.., 0);
+            buffer.pixels_mut()[TILE_BUFFER_LEN_PIXELS - TILE_BUFFER_SPLIT_PIXELS..]
+                .fill(self.background);
+        }
+
+        Ok(())
     }
 }
