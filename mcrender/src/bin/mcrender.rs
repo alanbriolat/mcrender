@@ -1,3 +1,4 @@
+use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -6,12 +7,12 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use config::FileFormat;
 use image::imageops::FilterType;
-use image::{ImageBuffer, Pixel, Rgba, RgbaImage};
+use image::{ImageBuffer, Rgba, RgbaImage};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
-use mcrender::canvas::{Image, ImageBuf, ImageMut, Rgb8, Rgba8};
+use mcrender::canvas::{ImageBuf, Rgb8, Rgba8};
 use mcrender::coords::CoordsXZ;
 use mcrender::render::Renderer;
 use mcrender::render2;
@@ -72,6 +73,13 @@ enum Commands {
         background: Rgb8,
         #[arg(long, value_parser = parse_coords_xz)]
         coords: CoordsXZ,
+        // TODO: dimension
+    },
+    RenderTiles {
+        source: PathBuf,
+        target: PathBuf,
+        #[arg(long, default_value = "000000", value_parser = parse_rgb_u8)]
+        background: Rgb8,
         // TODO: dimension
     },
 }
@@ -215,6 +223,30 @@ fn main() -> Result<()> {
             let output_image = ImageBuffer::from(&image);
             let mut output_file = File::create(target)?;
             output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
+        }
+
+        Commands::RenderTiles {
+            source,
+            target,
+            background,
+        } => {
+            let target_dir = target.join("tiles/0");
+            let renderer = render2::Renderer::new(&settings)?;
+            let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
+            log::debug!("world_info: {:?}", world_info);
+            let dim_info = world_info
+                .get_dimension(&DimensionID::Overworld)
+                .ok_or(anyhow!("no such dimension"))?;
+            // TODO: make blank-tile.png using background color
+            for (i, (row, col, image)) in renderer.render_tiles(dim_info, *background).enumerate() {
+                let tile_target = target_dir.join(format!("{col}/{row}.png"));
+                let tile_target_dir = tile_target.parent().unwrap();
+                fs::create_dir_all(&tile_target_dir)?;
+                let output_image = ImageBuffer::from(&image);
+                log::debug!("writing tile ({col},{row}) to {:?}", &tile_target);
+                let mut output_file = File::create(tile_target)?;
+                output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
+            }
         }
     }
 

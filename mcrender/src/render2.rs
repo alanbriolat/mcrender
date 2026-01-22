@@ -1,9 +1,9 @@
 use crate::asset::{AssetCache, SPRITE_SIZE};
 use crate::canvas;
-use crate::canvas::{ImageMut, Overlay, Rgba8};
-use crate::coords::{PointXZY, Vec2D};
+use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgb8, Rgba, Rgba8};
+use crate::coords::{CoordsXZ, PointXZY, Vec2D};
 use crate::settings::Settings;
-use crate::world::{CHUNK_SIZE, Chunk, Section, WORLD_HEIGHT};
+use crate::world::{CCoords, CHUNK_SIZE, Chunk, DimensionInfo, Section, WORLD_HEIGHT};
 
 /// The image width required to fully render a chunk section (16x16x16 blocks).
 ///
@@ -43,6 +43,17 @@ const SECTION_OFFSET_X: Vec2D<isize> = Vec2D(SPRITE_SIZE as isize / 2, SPRITE_SI
 const SECTION_OFFSET_Z: Vec2D<isize> = Vec2D(-(SPRITE_SIZE as isize / 2), SPRITE_SIZE as isize / 4);
 /// Screen offset for each step up (+Y) in section coordinate space.
 const SECTION_OFFSET_Y: Vec2D<isize> = Vec2D(0, -(SPRITE_SIZE as isize / 2));
+
+/// Screen offset for each chunk step east (+X).
+const CHUNK_OFFSET_X: Vec2D<isize> = Vec2D(
+    SECTION_RENDER_WIDTH as isize / 2,
+    SECTION_RENDER_HEIGHT as isize / 4,
+);
+/// Screen offset for each chunk step south (+Z).
+const CHUNK_OFFSET_Z: Vec2D<isize> = Vec2D(
+    -(SECTION_RENDER_WIDTH as isize / 2),
+    SECTION_RENDER_HEIGHT as isize / 4,
+);
 
 pub struct Renderer<'s> {
     settings: &'s Settings,
@@ -95,6 +106,7 @@ impl<'s> Renderer<'s> {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(coords = %chunk.coords))]
     pub fn render_chunk_at<I>(
         &self,
         chunk: &Chunk,
@@ -112,5 +124,76 @@ impl<'s> Renderer<'s> {
             self.render_section_at(section, output, x, y + y_offset as isize)?;
         }
         Ok(())
+    }
+
+    pub fn render_tiles(
+        &self,
+        dim_info: &DimensionInfo,
+        background: Rgb8,
+    ) -> impl Iterator<Item = (isize, isize, ImageBuf<Rgba8>)> {
+        const BUFFER_WIDTH: usize = CHUNK_RENDER_WIDTH;
+        const BUFFER_HEIGHT: usize = CHUNK_RENDER_HEIGHT + 3 * (SECTION_RENDER_HEIGHT / 4);
+        const BUFFER_LEN_PIXELS: usize = BUFFER_WIDTH * BUFFER_HEIGHT;
+        const BUFFER_SPLIT_PIXELS: usize = BUFFER_WIDTH * SECTION_RENDER_HEIGHT;
+        const BUFFER_SPLIT_CHANNELS: usize = BUFFER_SPLIT_PIXELS * <Rgba8 as Pixel>::CHANNELS;
+        let background = background.to_rgba();
+        let min_chunk = dim_info.min_region_coords().to_chunk_coords();
+        let max_chunk = dim_info.max_region_coords().to_chunk_coords();
+        let min_row = (min_chunk.x() + min_chunk.z()) / 4;
+        // TODO: add extra for rendering height of front-most chunks
+        let max_row = (max_chunk.x() + max_chunk.z()) / 4
+            + (CHUNK_RENDER_HEIGHT / SECTION_RENDER_HEIGHT) as i32;
+        let min_col = (min_chunk.x() - max_chunk.z()) / 2;
+        let max_col = (max_chunk.x() - min_chunk.z()) / 2;
+        log::debug!(
+            "map tile extent: ({}, {}) to ({}, {})",
+            min_col,
+            min_row,
+            max_col,
+            max_row
+        );
+        (min_col..=max_col).flat_map(move |col| {
+            let mut buffer = ImageBuf::<Rgba8>::from_pixel(BUFFER_WIDTH, BUFFER_HEIGHT, background);
+            (min_row..=max_row).map(move |row| {
+                // Figure out the chunk coords of the next 6 chunks that need to be rendered
+                // to cover the next tile down the column
+                let anchor = CoordsXZ::new(2 * row + col, 2 * row - col);
+                let offsets: [CoordsXZ; _] = [
+                    (0, 0).into(),
+                    (1, 0).into(),
+                    (0, 1).into(),
+                    (1, 1).into(),
+                    (2, 1).into(),
+                    (1, 2).into(),
+                ];
+                // Render each chunk of the 6 chunks, if they exist
+                for offset in offsets {
+                    let image_offset =
+                        CHUNK_OFFSET_X * offset.x() as isize + CHUNK_OFFSET_Z * offset.z() as isize;
+                    let coords = anchor + offset;
+                    let Some(raw_chunk) = dim_info.get_raw_chunk(CCoords(coords)).unwrap() else {
+                        continue;
+                    };
+                    let Ok(chunk) = raw_chunk.parse() else {
+                        log::error!("failed to parse chunk {coords}");
+                        continue;
+                    };
+                    self.render_chunk_at(&chunk, &mut buffer, image_offset.0, image_offset.1)
+                        .unwrap();
+                }
+                // TODO: optimise out tiles that don't show anything
+                // Create tile image from top section of buffer
+                let raw = Vec::from(&buffer.channels()[0..BUFFER_SPLIT_CHANNELS]);
+                let image =
+                    ImageBuf::from_raw(SECTION_RENDER_WIDTH, SECTION_RENDER_HEIGHT, raw).unwrap();
+                // Shift the buffer up to prepare for next tile down
+                buffer
+                    .channels_mut()
+                    .copy_within(BUFFER_SPLIT_CHANNELS.., 0);
+                buffer.pixels_mut()[BUFFER_LEN_PIXELS - BUFFER_SPLIT_PIXELS..].fill(background);
+                // Yield the tile and its coordinates
+                (row as isize, col as isize, image)
+            })
+        })
     }
 }
