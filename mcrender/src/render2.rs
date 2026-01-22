@@ -208,6 +208,9 @@ impl<'i, 's> MapRenderer<'i, 's> {
                     log::error!("failed to parse chunk {coords}");
                     continue;
                 };
+                if !chunk.fully_generated {
+                    continue;
+                }
                 self.renderer
                     .render_chunk_at(&chunk, &mut buffer, image_offset.0, image_offset.1)
                     .unwrap();

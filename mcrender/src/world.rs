@@ -480,6 +480,7 @@ impl RawChunk {
         let mut chunk = Chunk {
             coords: CCoords((chunk_nbt.x_pos, chunk_nbt.z_pos).into()),
             sections: Vec::with_capacity(chunk_nbt.sections.len()),
+            fully_generated: chunk_nbt.status == "minecraft:full",
         };
         let chunk_base_coords = BCoords(
             (
@@ -629,6 +630,7 @@ mod nbt {
 pub struct Chunk {
     pub coords: CCoords,
     pub sections: Vec<Section>,
+    pub fully_generated: bool,
 }
 
 impl Chunk {
