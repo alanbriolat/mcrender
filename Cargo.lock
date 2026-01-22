@@ -1155,6 +1155,7 @@ dependencies = [
  "log",
  "num-traits",
  "rand",
+ "rayon",
  "serde",
  "tracing",
  "tracing-subscriber",

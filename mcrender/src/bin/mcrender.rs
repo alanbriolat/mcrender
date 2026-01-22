@@ -8,6 +8,7 @@ use clap::Parser;
 use config::FileFormat;
 use image::imageops::FilterType;
 use image::{ImageBuffer, Rgba, RgbaImage};
+use rayon::prelude::*;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -81,6 +82,8 @@ enum Commands {
         target: PathBuf,
         #[arg(long, default_value = "000000", value_parser = parse_rgb_u8)]
         background: Rgb8,
+        #[arg(long)]
+        column: Option<i32>,
         // TODO: dimension
     },
 }
@@ -230,6 +233,7 @@ fn main() -> Result<()> {
             source,
             target,
             background,
+            column,
         } => {
             let target_dir = target.join("tiles/0");
             let renderer = render2::Renderer::new(&settings)?;
@@ -240,26 +244,35 @@ fn main() -> Result<()> {
                 .ok_or(anyhow!("no such dimension"))?;
             let map_renderer = MapRenderer::new(dim_info, renderer, *background);
             // TODO: make blank-tile.png using background color
-            // TODO: parallelize rendering columns
-            for col in map_renderer.col_range() {
-                map_renderer.render_column(col, |coords, image| {
-                    let tile_target = target_dir.join(format!("{}/{}.png", coords.0, coords.1));
-                    let tile_target_dir = tile_target.parent().unwrap();
-                    log::info!(
-                        "writing tile ({}, {}) to {:?}",
-                        coords.0,
-                        coords.1,
-                        &tile_target
-                    );
-                    fs::create_dir_all(&tile_target_dir).unwrap();
-                    let output_image = ImageBuffer::from(image);
-                    let mut output_file = File::create(tile_target).unwrap();
-                    output_image
-                        .write_to(&mut output_file, image::ImageFormat::Png)
-                        .unwrap();
-                    true
-                })?;
-            }
+            let col_range = match column {
+                Some(col) => *col..=*col,
+                None => map_renderer.col_range(),
+            };
+            col_range.into_par_iter().for_each(|col| {
+                // TODO: share a renderer but using RwLock (instead of Mutex) and less lock holding
+                //      during asset generation so there's less contention in AssetCache
+                let renderer = render2::Renderer::new(&settings).unwrap();
+                let map_renderer = MapRenderer::new(dim_info, renderer, *background);
+                map_renderer
+                    .render_column(col, |coords, image| {
+                        let tile_target = target_dir.join(format!("{}/{}.png", coords.0, coords.1));
+                        let tile_target_dir = tile_target.parent().unwrap();
+                        log::info!(
+                            "writing tile ({}, {}) to {:?}",
+                            coords.0,
+                            coords.1,
+                            &tile_target
+                        );
+                        fs::create_dir_all(&tile_target_dir).unwrap();
+                        let output_image = ImageBuffer::from(image);
+                        let mut output_file = File::create(tile_target).unwrap();
+                        output_image
+                            .write_to(&mut output_file, image::ImageFormat::Png)
+                            .unwrap();
+                        true
+                    })
+                    .unwrap();
+            });
         }
     }
 
