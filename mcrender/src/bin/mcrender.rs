@@ -13,11 +13,10 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
-use mcrender::canvas::{ImageBuf, Rgb8, Rgba8};
+use mcrender::canvas::{Rgb8, Rgba8};
 use mcrender::coords::CoordsXZ;
-use mcrender::render::Renderer;
 use mcrender::render2;
-use mcrender::render2::MapRenderer;
+use mcrender::render2::DimensionRenderer;
 use mcrender::settings::{Settings, convert_rgb};
 use mcrender::world::{BIndex, BlockRef, CCoords, DimensionID, RCoords};
 
@@ -64,6 +63,8 @@ enum Commands {
     RenderRegion {
         source: PathBuf,
         target: PathBuf,
+        #[arg(long, default_value = "000000", value_parser = parse_rgb_u8)]
+        background: Rgb8,
         #[arg(long, value_parser = parse_coords_xz)]
         coords: CoordsXZ,
         // TODO: dimension
@@ -180,19 +181,19 @@ fn main() -> Result<()> {
         Commands::RenderRegion {
             source,
             target,
+            background,
             coords,
         } => {
-            let asset_cache = AssetCache::new(&settings)?;
+            let renderer = render2::Renderer::new(&settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let region_info = dim_info
-                .get_region(RCoords(*coords))
-                .ok_or(anyhow!("no such region"))?;
-            let mut renderer = Renderer::new(asset_cache);
-            let image = renderer.render_region(&region_info)?;
+            let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
+            let coords = RCoords(*coords);
+            let image = dim_renderer.render_region(coords)?;
+            log::info!("writing output to {:?}", target);
             let output_image = ImageBuffer::from(&image);
             let mut output_file = File::create(target)?;
             output_image.write_to(&mut output_file, image::ImageFormat::Png)?;
@@ -210,19 +211,9 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let raw_chunk = dim_info
-                .get_raw_chunk(CCoords(*coords))?
-                .ok_or(anyhow!("no such chunk"))?;
-            let chunk = raw_chunk.parse()?;
-            let mut image = ImageBuf::<Rgba8>::from_pixel(
-                render2::CHUNK_RENDER_WIDTH,
-                render2::CHUNK_RENDER_HEIGHT,
-                background.to_rgba(),
-            );
-            let span = tracing::info_span!("render-test2-chunk");
-            span.in_scope(|| {
-                renderer.render_chunk_at(&chunk, &mut image, 0, 0).unwrap();
-            });
+            let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
+            let coords = CCoords(*coords);
+            let image = dim_renderer.render_chunk(coords)?;
             log::info!("writing output to {:?}", target);
             let output_image = ImageBuffer::from(&image);
             let mut output_file = File::create(target)?;
@@ -242,19 +233,19 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let map_renderer = MapRenderer::new(dim_info, renderer, *background);
+            let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
             // TODO: make blank-tile.png using background color
             let col_range = match column {
                 Some(col) => *col..=*col,
-                None => map_renderer.col_range(),
+                None => dim_renderer.col_range(),
             };
             col_range.into_par_iter().for_each(|col| {
                 // TODO: share a renderer but using RwLock (instead of Mutex) and less lock holding
                 //      during asset generation so there's less contention in AssetCache
                 let renderer = render2::Renderer::new(&settings).unwrap();
-                let map_renderer = MapRenderer::new(dim_info, renderer, *background);
-                map_renderer
-                    .render_column(col, |coords, image| {
+                let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
+                dim_renderer
+                    .render_map_column(col, |coords, image| {
                         let tile_target = target_dir.join(format!("{}/{}.png", coords.0, coords.1));
                         let tile_target_dir = tile_target.parent().unwrap();
                         log::info!(
