@@ -16,14 +16,20 @@ use mcrender::asset::AssetCache;
 use mcrender::canvas::Rgb8;
 use mcrender::coords::CoordsXZ;
 use mcrender::render::{DimensionRenderer, Renderer};
-use mcrender::settings::{Settings, convert_rgb};
+use mcrender::settings::Settings;
 use mcrender::world::{BIndex, BlockRef, CCoords, DimensionID, RCoords};
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
-    /// Set `assets_path` configuration option
-    #[arg(short, long)]
-    assets_path: Option<String>,
+    #[clap(flatten)]
+    global: GlobalOpts,
+
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, clap::Args)]
+struct GlobalOpts {
     /// Disable color in log output
     #[arg(long, default_value_t = false)]
     no_color: bool,
@@ -36,9 +42,12 @@ struct Cli {
     /// Load additional configuration files
     #[arg(short, long)]
     config: Vec<String>,
-
-    #[clap(subcommand)]
-    command: Commands,
+    /// Set `background_color` configuration option
+    #[arg(long, value_parser = parse_rgb_u8, global = true)]
+    background: Option<Rgb8>,
+    /// Set `assets_path` configuration option
+    #[arg(short, long, global = true)]
+    assets_path: Option<String>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -62,8 +71,6 @@ enum Commands {
     RenderRegion {
         source: PathBuf,
         target: PathBuf,
-        #[arg(long, default_value = "000000", value_parser = parse_rgb_u8)]
-        background: Rgb8,
         #[arg(long, value_parser = parse_coords_xz)]
         coords: CoordsXZ,
         // TODO: dimension
@@ -71,8 +78,6 @@ enum Commands {
     RenderChunk {
         source: PathBuf,
         target: PathBuf,
-        #[arg(long, default_value = "000000", value_parser = parse_rgb_u8)]
-        background: Rgb8,
         #[arg(long, value_parser = parse_coords_xz)]
         coords: CoordsXZ,
         // TODO: dimension
@@ -80,8 +85,6 @@ enum Commands {
     RenderTiles {
         source: PathBuf,
         target: PathBuf,
-        #[arg(long, default_value = "000000", value_parser = parse_rgb_u8)]
-        background: Rgb8,
         #[arg(long)]
         column: Option<i32>,
         // TODO: dimension
@@ -89,8 +92,9 @@ enum Commands {
 }
 
 fn parse_rgb_u8(s: &str) -> Result<Rgb8, String> {
-    let value = u32::from_str_radix(s, 16).map_err(|err| err.to_string())?;
-    Ok(convert_rgb(value))
+    u32::from_str_radix(s, 16)
+        .map_err(|err| err.to_string())
+        .map(Into::into)
 }
 
 fn parse_coords_xz(s: &str) -> Result<CoordsXZ, String> {
@@ -105,33 +109,35 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_span_events(FmtSpan::CLOSE)
-        .with_ansi(!cli.no_color)
+        .with_ansi(!cli.global.no_color)
         .init();
     log::debug!("args: {:?}", cli);
 
-    if cli.no_builtin_config {
+    if cli.global.no_builtin_config {
         log::warn!("ignoring built-in config");
     } else {
         log::info!("using built-in config");
     }
-    let mut builder = Settings::config_builder(cli.no_builtin_config)
-        .set_override_option("assets_path", cli.assets_path)?;
-    if let Ok(true) = std::fs::exists("mcrender.toml") {
-        if cli.no_default_config {
+    let mut builder = Settings::config_builder(cli.global.no_builtin_config)
+        .set_override_option("assets_path", cli.global.assets_path)?
+        .set_override_option(
+            "background_color",
+            cli.global.background.map(|c| u32::from(c)),
+        )?;
+    if let Ok(true) = fs::exists("mcrender.toml") {
+        if cli.global.no_default_config {
             log::warn!("ignoring default config: ./mcrender.toml");
         } else {
             log::info!("using default config: ./mcrender.toml");
             builder = builder.add_source(config::File::new("mcrender.toml", FileFormat::Toml));
         }
     }
-    for config_path in cli.config {
+    for config_path in cli.global.config {
         log::info!("using additional config: {}", &config_path);
         builder = builder.add_source(config::File::new(config_path.as_str(), FileFormat::Toml));
     }
     let config = builder.build()?;
     let settings = Settings::from_config(config)?;
-    // log::debug!("biome_colors: {:#?}", &settings.biome_colors);
-    // log::debug!("asset_rules: {:#?}", &settings.asset_rules);
 
     match &cli.command {
         Commands::AssetPreview {
@@ -180,7 +186,6 @@ fn main() -> Result<()> {
         Commands::RenderRegion {
             source,
             target,
-            background,
             coords,
         } => {
             let renderer = Renderer::new(&settings)?;
@@ -189,7 +194,7 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
+            let dim_renderer = DimensionRenderer::new(dim_info, renderer);
             let coords = RCoords(*coords);
             let image = dim_renderer.render_region(coords)?;
             log::info!("writing output to {:?}", target);
@@ -201,7 +206,6 @@ fn main() -> Result<()> {
         Commands::RenderChunk {
             source,
             target,
-            background,
             coords,
         } => {
             let renderer = Renderer::new(&settings)?;
@@ -210,7 +214,7 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
+            let dim_renderer = DimensionRenderer::new(dim_info, renderer);
             let coords = CCoords(*coords);
             let image = dim_renderer.render_chunk(coords)?;
             log::info!("writing output to {:?}", target);
@@ -222,7 +226,6 @@ fn main() -> Result<()> {
         Commands::RenderTiles {
             source,
             target,
-            background,
             column,
         } => {
             let target_dir = target.join("tiles/0");
@@ -232,7 +235,7 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
+            let dim_renderer = DimensionRenderer::new(dim_info, renderer);
             // TODO: make blank-tile.png using background color
             let col_range = match column {
                 Some(col) => *col..=*col,
@@ -242,7 +245,7 @@ fn main() -> Result<()> {
                 // TODO: share a renderer but using RwLock (instead of Mutex) and less lock holding
                 //      during asset generation so there's less contention in AssetCache
                 let renderer = Renderer::new(&settings).unwrap();
-                let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
+                let dim_renderer = DimensionRenderer::new(dim_info, renderer);
                 dim_renderer
                     .render_map_column(col, |coords, image| {
                         let tile_target = target_dir.join(format!("{}/{}.png", coords.0, coords.1));

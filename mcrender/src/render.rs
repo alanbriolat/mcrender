@@ -4,7 +4,7 @@ use anyhow::anyhow;
 
 use crate::asset::{AssetCache, SPRITE_SIZE};
 use crate::canvas;
-use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgb8, Rgba8};
+use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgba8};
 use crate::coords::{CoordsXZ, Vec2D};
 use crate::settings::Settings;
 use crate::world::{
@@ -154,14 +154,12 @@ impl<'s> Renderer<'s> {
 pub struct DimensionRenderer<'i, 's> {
     dim_info: &'i DimensionInfo,
     renderer: Renderer<'s>,
-    background: Rgba8,
     col_range: RangeInclusive<i32>,
     row_range: RangeInclusive<i32>,
 }
 
 impl<'i, 's> DimensionRenderer<'i, 's> {
-    pub fn new(dim_info: &'i DimensionInfo, renderer: Renderer<'s>, background: Rgb8) -> Self {
-        let background = background.to_rgba();
+    pub fn new(dim_info: &'i DimensionInfo, renderer: Renderer<'s>) -> Self {
         let min_chunk = dim_info.min_region_coords().to_chunk_coords();
         let max_chunk = dim_info.max_region_coords().to_chunk_coords();
         let min_row = (min_chunk.x() + min_chunk.z()) / 4;
@@ -173,7 +171,6 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
         Self {
             dim_info,
             renderer,
-            background,
             col_range: min_col..=max_col,
             row_range: min_row..=max_row,
         }
@@ -213,10 +210,11 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
     where
         F: Fn(Vec2D<i32>, &ImageBuf<Rgba8, &[u8]>) -> bool,
     {
+        let background = self.renderer.settings.background_color.to_rgba();
         let mut buffer = ImageBuf::<Rgba8>::from_pixel(
             Self::TILE_BUFFER_WIDTH,
             Self::TILE_BUFFER_HEIGHT,
-            self.background,
+            background,
         );
 
         for row in self.row_range() {
@@ -261,7 +259,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
                 .channels_mut()
                 .copy_within(Self::TILE_BUFFER_SPLIT_CHANNELS.., 0);
             buffer.pixels_mut()[Self::TILE_BUFFER_LEN_PIXELS - Self::TILE_BUFFER_SPLIT_PIXELS..]
-                .fill(self.background);
+                .fill(background);
         }
 
         Ok(())
@@ -285,7 +283,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
         let mut output = ImageBuf::from_pixel(
             Self::REGION_RENDER_WIDTH,
             Self::REGION_RENDER_HEIGHT,
-            self.background,
+            self.renderer.settings.background_color.to_rgba(),
         );
         let region_info = self
             .dim_info
@@ -306,8 +304,11 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
 
     #[tracing::instrument(level = "debug", skip_all, fields(coords = %coords))]
     pub fn render_chunk(&self, coords: CCoords) -> anyhow::Result<ImageBuf<Rgba8>> {
-        let mut output =
-            ImageBuf::from_pixel(CHUNK_RENDER_WIDTH, CHUNK_RENDER_HEIGHT, self.background);
+        let mut output = ImageBuf::from_pixel(
+            CHUNK_RENDER_WIDTH,
+            CHUNK_RENDER_HEIGHT,
+            self.renderer.settings.background_color.to_rgba(),
+        );
         let raw_chunk = self
             .dim_info
             .get_raw_chunk(coords)?

@@ -268,6 +268,8 @@ impl<'de> Deserialize<'de> for ColorMap {
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     pub assets_path: PathBuf,
+    #[serde(deserialize_with = "deserialize_rgb_u8", default)]
+    pub background_color: Rgb<u8>,
     pub asset_rules: AssetRules,
     pub biome_colors: BTreeMap<String, ColorMap>,
 }
@@ -288,13 +290,9 @@ impl Settings {
     }
 }
 
-pub const fn convert_rgb(raw: u32) -> Rgb<u8> {
-    Rgb([(raw >> 16) as u8, (raw >> 8) as u8, raw as u8])
-}
-
 fn deserialize_rgb_u8<'de, D>(deserializer: D) -> Result<Rgb<u8>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Ok(convert_rgb(u32::deserialize(deserializer)?))
+    Ok(u32::deserialize(deserializer)?.into())
 }

@@ -74,6 +74,12 @@ pub unsafe trait TransmutablePixel: Pixel {
 #[repr(transparent)]
 pub struct Rgb<T: Subpixel>(pub [T; 3]);
 
+impl<T: Subpixel + Default> Default for Rgb<T> {
+    fn default() -> Self {
+        Rgb([T::default(), T::default(), T::default()])
+    }
+}
+
 impl<T: Subpixel> Rgb<T> {
     #[inline(always)]
     pub fn to_rgba(self) -> Rgba<T> {
@@ -128,12 +134,30 @@ impl From<Rgb<u8>> for image::Rgb<u8> {
     }
 }
 
+impl From<u32> for Rgb<u8> {
+    fn from(raw: u32) -> Self {
+        Rgb([(raw >> 16) as u8, (raw >> 8) as u8, raw as u8])
+    }
+}
+
+impl From<Rgb<u8>> for u32 {
+    fn from(rgb: Rgb<u8>) -> Self {
+        ((rgb[0] as u32) << 16) | ((rgb[1] as u32) << 8) | (rgb[2] as u32)
+    }
+}
+
 unsafe impl TransmutablePixel for Rgb<u8> {}
 unsafe impl TransmutablePixel for Rgb<f32> {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, derive_more::From, derive_more::Into)]
 #[repr(transparent)]
 pub struct Rgba<T: Subpixel>(pub [T; 4]);
+
+impl<T: Subpixel + Default> Default for Rgba<T> {
+    fn default() -> Self {
+        Rgba([T::default(), T::default(), T::default(), T::default()])
+    }
+}
 
 impl<T: Subpixel> Rgba<T> {
     #[inline(always)]
