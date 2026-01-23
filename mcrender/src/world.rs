@@ -575,8 +575,8 @@ mod nbt {
 
     #[derive(Debug, Deserialize)]
     pub(super) struct Chunk<'a> {
-        #[serde(rename = "DataVersion")]
-        pub data_version: u32,
+        // #[serde(rename = "DataVersion")]
+        // pub data_version: u32,
         #[serde(rename = "xPos")]
         pub x_pos: i32,
         #[serde(rename = "zPos")]

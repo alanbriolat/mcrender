@@ -8,7 +8,7 @@ use image::{GenericImageView, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
 use crate::canvas;
-use crate::canvas::{Image, ImageBuf, Pixel, Rgb, Rgba, Rgba8};
+use crate::canvas::{Image, ImageBuf, Pixel, Rgb, Rgba8};
 use crate::proplist::DefaultPropList as PropList;
 use crate::settings::{AssetRenderSpec, Settings};
 use crate::world::BlockRef;
@@ -562,12 +562,6 @@ const TINT_BLOCK_3D: SolidBlockTints = SolidBlockTints {
     east: Some(Rgb([200, 200, 200])),
 };
 
-fn tint(image: &RgbaImage, tint: Rgb<u8>) -> RgbaImage {
-    let mut output = image.clone();
-    tint_in_place(&mut output, tint);
-    output
-}
-
 fn tint_in_place(image: &mut RgbaImage, tint: Rgb<u8>) {
     for pixel in image.pixels_mut() {
         pixel[0] = (pixel[0] as f32 * (tint[0] as f32 / 255.)) as u8;
@@ -575,15 +569,6 @@ fn tint_in_place(image: &mut RgbaImage, tint: Rgb<u8>) {
         pixel[2] = (pixel[2] as f32 * (tint[2] as f32 / 255.)) as u8;
     }
 }
-
-// fn tint_into(image: &RgbaImage, tint: Rgb<u8>, output: &mut RgbaImage) {
-//     for (old, new) in image.pixels().zip(output.pixels_mut()) {
-//         new[0] = (old[0] as f32 * (tint[0] as f32 / 255.)) as u8;
-//         new[1] = (old[1] as f32 * (tint[1] as f32 / 255.)) as u8;
-//         new[2] = (old[2] as f32 * (tint[2] as f32 / 255.)) as u8;
-//         new[3] = old[3];
-//     }
-// }
 
 pub const SPRITE_SIZE: usize = 24;
 const SPRITE_BUF_SIZE: usize = SPRITE_SIZE * SPRITE_SIZE * <Rgba8 as Pixel>::CHANNELS;

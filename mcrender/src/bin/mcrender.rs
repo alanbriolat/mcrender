@@ -13,10 +13,9 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use mcrender::asset::AssetCache;
-use mcrender::canvas::{Rgb8, Rgba8};
+use mcrender::canvas::Rgb8;
 use mcrender::coords::CoordsXZ;
-use mcrender::render2;
-use mcrender::render2::DimensionRenderer;
+use mcrender::render::{DimensionRenderer, Renderer};
 use mcrender::settings::{Settings, convert_rgb};
 use mcrender::world::{BIndex, BlockRef, CCoords, DimensionID, RCoords};
 
@@ -184,7 +183,7 @@ fn main() -> Result<()> {
             background,
             coords,
         } => {
-            let renderer = render2::Renderer::new(&settings)?;
+            let renderer = Renderer::new(&settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
@@ -205,7 +204,7 @@ fn main() -> Result<()> {
             background,
             coords,
         } => {
-            let renderer = render2::Renderer::new(&settings)?;
+            let renderer = Renderer::new(&settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
@@ -227,7 +226,7 @@ fn main() -> Result<()> {
             column,
         } => {
             let target_dir = target.join("tiles/0");
-            let renderer = render2::Renderer::new(&settings)?;
+            let renderer = Renderer::new(&settings)?;
             let world_info = mcrender::world::WorldInfo::try_from_path(source.clone())?;
             log::debug!("world_info: {:?}", world_info);
             let dim_info = world_info
@@ -242,7 +241,7 @@ fn main() -> Result<()> {
             col_range.into_par_iter().for_each(|col| {
                 // TODO: share a renderer but using RwLock (instead of Mutex) and less lock holding
                 //      during asset generation so there's less contention in AssetCache
-                let renderer = render2::Renderer::new(&settings).unwrap();
+                let renderer = Renderer::new(&settings).unwrap();
                 let dim_renderer = DimensionRenderer::new(dim_info, renderer, *background);
                 dim_renderer
                     .render_map_column(col, |coords, image| {

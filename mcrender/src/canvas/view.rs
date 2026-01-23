@@ -33,7 +33,13 @@ where
     }
 
     /// Alternative to `Image::view()` that will avoid an extra level of indirection.
-    fn view(&self, left: usize, top: usize, width: usize, height: usize) -> ImageView<&I::Target> {
+    pub fn view(
+        &self,
+        left: usize,
+        top: usize,
+        width: usize,
+        height: usize,
+    ) -> ImageView<&I::Target> {
         ImageView::new(
             &*self.image,
             left.saturating_add(self.left),
@@ -50,7 +56,7 @@ where
     I::Target: Image,
 {
     /// Alternative to `ImageMut::view_mut()` that will avoid an extra level of indirection.
-    fn view_mut(
+    pub fn view_mut(
         &mut self,
         left: usize,
         top: usize,
