@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use arcstr::ArcStr;
 use config::builder::DefaultState;
 use config::{Config, ConfigBuilder, File, FileFormat};
 use serde::{Deserialize, Deserializer};
 
 use crate::asset::AssetInfo;
 use crate::canvas::Rgb;
+use crate::util::intern_str;
 use crate::world::BlockRef;
 
 #[derive(Debug, Deserialize)]
@@ -121,7 +124,7 @@ impl AssetStringBuilder {
 #[derive(derive_more::Debug, Deserialize)]
 #[debug("AssetRule {{\n    render: {render:?},\n    properties: {properties:?},\n}}")]
 pub struct AssetRule {
-    pub render: AssetRenderSpec,
+    pub render: Arc<AssetRenderSpec>,
     #[serde(default)]
     pub properties: BTreeSet<String>,
 }
@@ -147,7 +150,7 @@ impl TintColor {
         match self {
             TintColor::Literal(literal) => Some(literal.clone()),
             TintColor::BiomeLookup(section) => {
-                let biome = info.short_biome();
+                let biome = info.biome();
                 if let Some(color_map) = settings.biome_colors.get(section) {
                     let biome_tint = color_map.get(biome);
                     log::debug!(
@@ -170,13 +173,13 @@ impl TintColor {
 #[derive(Debug)]
 pub struct AssetRules {
     default: Arc<AssetRule>,
-    rules: BTreeMap<String, Arc<AssetRule>>,
+    rules: BTreeMap<ArcStr, Arc<AssetRule>>,
 }
 
 impl AssetRules {
     pub fn get(&self, block: &BlockRef) -> (Arc<AssetRule>, AssetInfo) {
         let mut info = AssetInfo::new(block.state.name.as_str());
-        let rule = self.rules.get(info.short_name()).unwrap_or(&self.default);
+        let rule = self.rules.get(info.name()).unwrap_or(&self.default);
         info = info.with_properties(block.state.properties.iter().filter_map(|(k, v)| {
             if self.default.properties.contains(k) || rule.properties.contains(k) {
                 Some((k, v))
@@ -213,7 +216,12 @@ impl<'de> Deserialize<'de> for AssetRules {
             let names = raw_rule.names.unwrap_or_else(|| vec![rule_name]);
             let rule = Arc::new(raw_rule.rule);
             for name in names.into_iter() {
-                rules.insert(name, rule.clone());
+                let key = if name.contains(':') {
+                    intern_str(&name)
+                } else {
+                    intern_str(format!("minecraft:{name}"))
+                };
+                rules.insert(key, rule.clone());
             }
         }
 
@@ -224,7 +232,7 @@ impl<'de> Deserialize<'de> for AssetRules {
 #[derive(Debug)]
 pub struct ColorMap {
     default: Rgb<u8>,
-    lookup: BTreeMap<String, Rgb<u8>>,
+    lookup: BTreeMap<ArcStr, Rgb<u8>>,
 }
 
 impl ColorMap {
@@ -253,9 +261,13 @@ impl<'de> Deserialize<'de> for ColorMap {
         let default = raw_default.color;
         let mut biomes = BTreeMap::new();
         for (biome, RawColorEntry { color, aliases }) in raw.into_iter() {
-            biomes.insert(biome, color);
-            for alias in aliases.into_iter() {
-                biomes.insert(alias, color);
+            for alias in iter::once(biome).chain(aliases.into_iter()) {
+                let key = if alias.contains(':') {
+                    intern_str(&alias)
+                } else {
+                    intern_str(format!("minecraft:{alias}"))
+                };
+                biomes.insert(key, color);
             }
         }
         Ok(Self {

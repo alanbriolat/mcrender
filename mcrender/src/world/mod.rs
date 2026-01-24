@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::{fs, io};
 
 use anyhow::anyhow;
+use arcstr::ArcStr;
 use bitfields::bitfield;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::Buf;
@@ -25,6 +26,7 @@ use derivative::Derivative;
 
 use crate::coords::{CoordsXZ, CoordsXZY, IndexXZ, IndexXZY};
 use crate::proplist::DefaultPropList as PropList;
+use crate::util::intern_str;
 
 const SECTOR_SIZE: usize = 4096;
 pub const REGION_SIZE: u32 = 32;
@@ -533,7 +535,7 @@ impl RawChunk {
             let mut block_palette = Vec::with_capacity(section_nbt.block_states.palette.len());
             for bs in section_nbt.block_states.palette.into_iter() {
                 block_palette.push(BlockState {
-                    name: bs.name.into_owned(),
+                    name: intern_str(bs.name),
                     properties: bs.properties.unwrap_or_else(|| PropList::new()),
                 })
             }
@@ -564,11 +566,11 @@ impl RawChunk {
             }
 
             // Collect the biome palette (the collection of biome names used in this section)
-            let biome_palette: Vec<String> = section_nbt
+            let biome_palette: Vec<_> = section_nbt
                 .biomes
                 .palette
                 .into_iter()
-                .map(|biome| biome.into_owned())
+                .map(|biome| intern_str(biome))
                 .collect();
 
             // Record the biome index for each block; biomes indexes apply to 4x4x4 regions, not
@@ -692,7 +694,7 @@ pub struct Section {
     pub base: BCoords,
     pub block_info: [BlockInfo; SECTION_BLOCK_COUNT],
     pub block_palette: Vec<BlockState>,
-    pub biome_palette: Vec<String>,
+    pub biome_palette: Vec<ArcStr>,
 }
 
 impl Section {
@@ -716,12 +718,12 @@ impl Section {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct BlockState {
     // TODO: this should just be a well-known property instead?
-    pub name: String,
+    pub name: ArcStr,
     pub properties: PropList,
 }
 
 impl BlockState {
-    pub fn new(name: String) -> BlockState {
+    pub fn new(name: ArcStr) -> BlockState {
         BlockState {
             name,
             properties: PropList::new(),

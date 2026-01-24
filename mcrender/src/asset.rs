@@ -62,8 +62,12 @@ impl AssetInfo {
         self.get(k.as_ref())
     }
 
+    pub fn name(&self) -> &str {
+        self.get(PROP_NAME).unwrap()
+    }
+
     pub fn short_name(&self) -> &str {
-        let name = self.get(PROP_NAME).unwrap();
+        let name = self.name();
         if let Some((_left, right)) = name.split_once(":") {
             right
         } else {
@@ -71,13 +75,8 @@ impl AssetInfo {
         }
     }
 
-    pub fn short_biome(&self) -> &str {
-        let biome = self.get_property(PROP_BIOME).unwrap_or(DEFAULT_BIOME);
-        if let Some((_left, right)) = biome.split_once(":") {
-            right
-        } else {
-            biome
-        }
+    pub fn biome(&self) -> &str {
+        self.get_property(PROP_BIOME).unwrap_or(DEFAULT_BIOME)
     }
 }
 

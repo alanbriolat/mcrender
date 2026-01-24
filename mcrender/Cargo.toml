@@ -9,7 +9,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 fastnbt = "2.6.0"
 log = "0.4.29"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 bytes = "1.11.0"
 flate2 = "1.1.5"
 byteorder = "1.5.0"
@@ -22,6 +22,8 @@ config = "0.15.19"
 num-traits = "0.2.19"
 rayon = "1.11.0"
 bitfields = "1.0.2"
+arcstr = "1.2.0"
+parking_lot = "0.12.5"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
