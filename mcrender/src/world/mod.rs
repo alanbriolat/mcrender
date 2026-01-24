@@ -4,6 +4,9 @@ Anvil file format notes:
 - A region's chunk offset table is ordered by (Z, X).
 - A chunk's blocks are ordered by (Y, Z, X).
  */
+
+mod nbt;
+
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -14,10 +17,11 @@ use std::str::FromStr;
 use std::{fs, io};
 
 use anyhow::anyhow;
+use bitfields::bitfield;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::Buf;
-use derivative::Derivative; // TODO: replace with derive_more::Debug
-use serde::Deserialize;
+// TODO: replace with derive_more::Debug
+use derivative::Derivative;
 
 use crate::coords::{CoordsXZ, CoordsXZY, IndexXZ, IndexXZY};
 use crate::proplist::DefaultPropList as PropList;
@@ -160,7 +164,10 @@ impl CIndex {
     }
 
     fn from_flat_index(index: usize) -> Self {
-        assert!(index < (REGION_SIZE * REGION_SIZE) as usize);
+        assert!(
+            index < (REGION_SIZE * REGION_SIZE) as usize,
+            "not a valid region chunk index"
+        );
         Self((index as u32 % REGION_SIZE, index as u32 / REGION_SIZE).into())
     }
 }
@@ -212,6 +219,33 @@ pub struct BCoords(pub CoordsXZY);
     derive_more::MulAssign,
 )]
 pub struct BIndex(pub IndexXZY);
+
+impl BIndex {
+    pub fn to_flat_index(self) -> usize {
+        (self.y() * CHUNK_SIZE * CHUNK_SIZE + self.z() * CHUNK_SIZE + self.x()) as usize
+    }
+
+    pub fn from_flat_index(index: usize) -> Self {
+        assert!(
+            index < (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize,
+            "not a valid section block index"
+        );
+        let x = index & 0xF;
+        let z = (index >> 4) & 0xF;
+        let y = (index >> 8) & 0xF;
+        Self((x as u32, z as u32, y as u32).into())
+    }
+
+    fn to_biome_index(self) -> usize {
+        let index = ((self.y() / 4) << 4) | ((self.z() / 4) << 2) | (self.x() / 4);
+        let index = index as usize;
+        assert!(
+            index < SECTION_BIOME_COUNT,
+            "not a valid section block index"
+        );
+        index
+    }
+}
 
 #[derive(Debug)]
 pub struct WorldInfo {
@@ -491,64 +525,98 @@ impl RawChunk {
                 .into(),
         );
 
+        let mut sky_light_data: Vec<Option<fastnbt::ByteArray>> =
+            Vec::with_capacity(chunk_nbt.sections.len());
+
         for section_nbt in chunk_nbt.sections.into_iter() {
-            let block_palette: Vec<BlockState> = section_nbt
-                .block_states
-                .palette
-                .into_iter()
-                .map(|bs| BlockState {
+            // Collect the block palette (the collection of unique block states that exist in this section)
+            let mut block_palette = Vec::with_capacity(section_nbt.block_states.palette.len());
+            for bs in section_nbt.block_states.palette.into_iter() {
+                block_palette.push(BlockState {
                     name: bs.name.into_owned(),
                     properties: bs.properties.unwrap_or_else(|| PropList::new()),
                 })
-                .collect();
-            let block_indices = match section_nbt.block_states.data {
-                None => Vec::from([0u16; SECTION_BLOCK_COUNT]),
-                Some(data) => {
-                    let palette_count = block_palette.len() as u64;
-                    let bits = max(4, u64::BITS - (palette_count - 1).leading_zeros()) as usize;
-                    let packing = u64::BITS as usize / bits;
-                    let mask = (1u64 << bits) - 1;
-                    data.iter()
-                        .flat_map(|v| {
-                            let mut v = v as u64;
-                            std::iter::repeat_with(move || {
-                                let next = v & mask;
-                                v = v >> bits;
-                                next as u16
-                            })
-                            .take(packing)
+            }
+
+            // Record the block state index for each block; if there is no data, then the indexes are all
+            // 0 by default, i.e. the first block palette entry (correct according to chunk format)
+            let mut block_info = [BlockInfo::new(); SECTION_BLOCK_COUNT];
+            if let Some(data) = section_nbt.block_states.data {
+                let palette_count = block_palette.len() as u64;
+                let bits = max(4, u64::BITS - (palette_count - 1).leading_zeros()) as usize;
+                let packing = u64::BITS as usize / bits;
+                let mask = (1u64 << bits) - 1;
+                data.iter()
+                    .flat_map(|v| {
+                        let mut v = v as u64;
+                        std::iter::repeat_with(move || {
+                            let next = v & mask;
+                            v = v >> bits;
+                            next as u16
                         })
-                        .take(SECTION_BLOCK_COUNT)
-                        .collect()
-                }
-            };
+                        .take(packing)
+                    })
+                    .take(SECTION_BLOCK_COUNT)
+                    .zip(block_info.iter_mut())
+                    .for_each(|(v, info)| {
+                        info.set_state_index(v);
+                    });
+            }
+
+            // Collect the biome palette (the collection of biome names used in this section)
             let biome_palette: Vec<String> = section_nbt
                 .biomes
                 .palette
                 .into_iter()
                 .map(|biome| biome.into_owned())
                 .collect();
-            let biome_indices = match section_nbt.biomes.data {
-                None => Vec::from([0u8; SECTION_BIOME_COUNT]),
-                Some(data) => {
-                    let palette_count = biome_palette.len() as u64;
-                    let bits = (u64::BITS - (palette_count - 1).leading_zeros()) as usize;
-                    let packing = u64::BITS as usize / bits;
-                    let mask = (1u64 << bits) - 1;
-                    data.iter()
-                        .flat_map(|v| {
-                            let mut v = v as u64;
-                            std::iter::repeat_with(move || {
-                                let next = v & mask;
-                                v = v >> bits;
-                                next as u8
-                            })
-                            .take(packing)
+
+            // Record the biome index for each block; biomes indexes apply to 4x4x4 regions, not
+            // individual blocks
+            if let Some(data) = section_nbt.biomes.data {
+                let palette_count = biome_palette.len() as u64;
+                let bits = (u64::BITS - (palette_count - 1).leading_zeros()) as usize;
+                let packing = u64::BITS as usize / bits;
+                let mask = (1u64 << bits) - 1;
+                let mut indices = [0u8; SECTION_BIOME_COUNT];
+                data.iter()
+                    .flat_map(|v| {
+                        let mut v = v as u64;
+                        std::iter::repeat_with(move || {
+                            let next = v & mask;
+                            v = v >> bits;
+                            next as u8
                         })
-                        .take(SECTION_BIOME_COUNT)
-                        .collect()
-                }
-            };
+                        .take(packing)
+                    })
+                    .take(SECTION_BIOME_COUNT)
+                    .zip(indices.iter_mut())
+                    .for_each(|(v, index)| {
+                        *index = v;
+                    });
+                block_info.iter_mut().enumerate().for_each(|(i, info)| {
+                    let block_index = BIndex::from_flat_index(i);
+                    let biome_index = block_index.to_biome_index();
+                    info.set_biome_index(indices[biome_index]);
+                });
+            }
+
+            // If there's no block light data, then the block light is 0, which is the default value in the struct
+            if let Some(data) = section_nbt.block_light {
+                data.iter()
+                    .flat_map(|v| {
+                        let v = v as u8;
+                        [v >> 4, v & 0xF]
+                    })
+                    .zip(block_info.iter_mut())
+                    .for_each(|(v, block_info)| {
+                        block_info.set_lighting(block_info.lighting().with_block(v));
+                    });
+            }
+
+            // Save sky light data to process top-to-bottom after all sections have been converted
+            sky_light_data.push(section_nbt.sky_light);
+
             let section = Section {
                 base: BCoords(
                     (
@@ -558,71 +626,45 @@ impl RawChunk {
                     )
                         .into(),
                 ),
+                block_info,
                 block_palette,
-                block_indices,
                 biome_palette,
-                biome_indices,
             };
             chunk.sections.push(section);
         }
+
+        // Process the save sky light data top-to-bottom, because absent data needs to be propagated
+        // (default for top of the chunk is full sky light, i.e. 0xFF for each byte)
+        let mut sky_light = [-1i8; 2048];
+        for (data, section) in sky_light_data
+            .into_iter()
+            .rev()
+            .zip(chunk.sections.iter_mut().rev())
+        {
+            const LAYER_LEN: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize / 2;
+            if let Some(data) = data {
+                // Have data for this section, so use it
+                sky_light.copy_from_slice(&*data);
+            } else {
+                // No data for this section,  so duplicate the bottom layer of the section above
+                for i in (LAYER_LEN..sky_light.len()).step_by(LAYER_LEN) {
+                    sky_light.copy_within(0..LAYER_LEN, i);
+                }
+            }
+            sky_light
+                .iter()
+                .copied()
+                .flat_map(|v| {
+                    let v = v as u8;
+                    [v >> 4, v & 0xF]
+                })
+                .zip(section.block_info.iter_mut())
+                .for_each(|(v, block_info)| {
+                    block_info.set_lighting(block_info.lighting().with_sky(v));
+                });
+        }
+
         Ok(chunk)
-    }
-}
-
-mod nbt {
-    use super::*;
-    use std::borrow::Cow;
-
-    #[derive(Debug, Deserialize)]
-    pub(super) struct Chunk<'a> {
-        // #[serde(rename = "DataVersion")]
-        // pub data_version: u32,
-        #[serde(rename = "xPos")]
-        pub x_pos: i32,
-        #[serde(rename = "zPos")]
-        pub z_pos: i32,
-        #[serde(rename = "yPos")]
-        pub y_pos: i32,
-        #[serde(rename = "Status")]
-        pub status: Cow<'a, str>,
-        #[serde(borrow)]
-        pub sections: Vec<Section<'a>>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    pub(super) struct Section<'a> {
-        #[serde(rename = "Y")]
-        pub y: i8,
-        #[serde(borrow)]
-        pub block_states: BlockStates<'a>,
-        #[serde(borrow)]
-        pub biomes: Biomes<'a>,
-    }
-
-    #[derive(Deserialize, derive_more::Debug)]
-    pub(super) struct BlockStates<'a> {
-        pub palette: Vec<BlockState<'a>>,
-        #[serde(borrow)]
-        #[debug(ignore)]
-        pub data: Option<fastnbt::borrow::LongArray<'a>>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    pub(super) struct BlockState<'a> {
-        #[serde(rename = "Name")]
-        #[serde(borrow)]
-        pub name: Cow<'a, str>,
-        #[serde(rename = "Properties")]
-        pub properties: Option<PropList>,
-    }
-
-    #[derive(Deserialize, derive_more::Debug)]
-    pub(super) struct Biomes<'a> {
-        #[serde(borrow)]
-        pub palette: Vec<Cow<'a, str>>,
-        #[serde(borrow)]
-        #[debug(ignore)]
-        pub data: Option<fastnbt::borrow::LongArray<'a>>,
     }
 }
 
@@ -648,32 +690,26 @@ impl Chunk {
 #[derive(Debug)]
 pub struct Section {
     pub base: BCoords,
+    pub block_info: [BlockInfo; SECTION_BLOCK_COUNT],
     pub block_palette: Vec<BlockState>,
-    pub block_indices: Vec<u16>,
     pub biome_palette: Vec<String>,
-    pub biome_indices: Vec<u8>,
 }
 
 impl Section {
     pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef<'_>> {
-        self.block_indices
-            .iter()
-            .enumerate()
-            .map(|(i, &palette_index)| {
-                let x = i & 0xF;
-                let z = (i >> 4) & 0xF;
-                let y = (i >> 8) & 0xF;
-                let index = BIndex((x as u32, z as u32, y as u32).into());
-                let state = &self.block_palette[palette_index as usize];
-                let biome_index_index = ((y >> 2) << 4) | ((z >> 2) << 2) | (x >> 2);
-                let biome_index = self.biome_indices[biome_index_index] as usize;
-                let biome = self.biome_palette[biome_index].as_str();
-                BlockRef {
-                    index,
-                    state,
-                    biome,
-                }
-            })
+        self.block_info.iter().enumerate().map(|(i, &info)| {
+            let x = i & 0xF;
+            let z = (i >> 4) & 0xF;
+            let y = (i >> 8) & 0xF;
+            let index = BIndex((x as u32, z as u32, y as u32).into());
+            let state = &self.block_palette[info.state_index() as usize];
+            let biome = self.biome_palette[info.biome_index() as usize].as_str();
+            BlockRef {
+                index,
+                state,
+                biome,
+            }
+        })
     }
 }
 
@@ -708,4 +744,41 @@ pub struct BlockRef<'a> {
     pub index: BIndex,
     pub state: &'a BlockState,
     pub biome: &'a str,
+}
+
+#[bitfield(u8)]
+#[derive(Clone, Copy)]
+pub struct LightLevel {
+    #[bits(4)]
+    block: u8,
+    #[bits(4)]
+    sky: u8,
+}
+
+impl LightLevel {
+    #[inline(always)]
+    pub fn with_block(mut self, v: u8) -> Self {
+        self.set_block(v);
+        self
+    }
+
+    #[inline(always)]
+    pub fn with_sky(mut self, v: u8) -> Self {
+        self.set_sky(v);
+        self
+    }
+
+    #[inline(always)]
+    pub fn effective(self) -> u8 {
+        max(self.block(), self.sky())
+    }
+}
+
+#[bitfield(u32)]
+#[derive(Clone, Copy)]
+pub struct BlockInfo {
+    state_index: u16,
+    biome_index: u8,
+    #[bits(8)]
+    lighting: LightLevel,
 }

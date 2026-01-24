@@ -21,6 +21,7 @@ derive_more = { version = "2.1.1", features = ["full"] }
 config = "0.15.19"
 num-traits = "0.2.19"
 rayon = "1.11.0"
+bitfields = "1.0.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
