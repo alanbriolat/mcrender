@@ -17,7 +17,7 @@ use mcrender::canvas::Rgb8;
 use mcrender::coords::CoordsXZ;
 use mcrender::render::{DimensionRenderer, Renderer};
 use mcrender::settings::Settings;
-use mcrender::world::{BIndex, BlockRef, CCoords, DimensionID, RCoords};
+use mcrender::world::{BIndex, BlockInfo, CCoords, DimensionID, LightLevelBuilder, RCoords};
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
@@ -156,10 +156,16 @@ fn main() -> Result<()> {
                 };
                 block_state = block_state.with_property(key, value);
             }
-            let block_ref = BlockRef {
+            let rule = settings.asset_rules.get_rule(&block_state.name);
+            let block_ref = BlockInfo {
                 index: BIndex((0, 0, 0).into()),
                 state: &block_state,
-                biome,
+                biome: biome.into(),
+                lighting: LightLevelBuilder::new()
+                    .with_block(0xF)
+                    .with_sky(0xF)
+                    .build(),
+                render: rule.render.clone(),
             };
             let asset = asset_cache
                 .get_asset(&block_ref)

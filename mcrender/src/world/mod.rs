@@ -9,11 +9,13 @@ mod nbt;
 
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{fs, io};
 
 use anyhow::anyhow;
@@ -21,11 +23,11 @@ use arcstr::ArcStr;
 use bitfields::bitfield;
 use byteorder::{BigEndian, ReadBytesExt};
 use bytes::Buf;
-// TODO: replace with derive_more::Debug
-use derivative::Derivative;
+use derivative::Derivative; // TODO: replace with derive_more::Debug
 
 use crate::coords::{CoordsXZ, CoordsXZY, IndexXZ, IndexXZY};
 use crate::proplist::DefaultPropList as PropList;
+use crate::settings::{AssetRenderSpec, AssetRule, Settings};
 use crate::util::intern_str;
 
 const SECTOR_SIZE: usize = 4096;
@@ -510,7 +512,7 @@ pub struct RawChunk {
     pub data: Vec<u8>,
 }
 impl RawChunk {
-    pub fn parse(&self) -> anyhow::Result<Chunk> {
+    pub fn parse(&self, settings: &Settings) -> anyhow::Result<Chunk> {
         let chunk_nbt: nbt::Chunk = fastnbt::from_bytes(self.data.as_slice())?;
 
         let mut chunk = Chunk {
@@ -534,15 +536,17 @@ impl RawChunk {
             // Collect the block palette (the collection of unique block states that exist in this section)
             let mut block_palette = Vec::with_capacity(section_nbt.block_states.palette.len());
             for bs in section_nbt.block_states.palette.into_iter() {
-                block_palette.push(BlockState {
-                    name: intern_str(bs.name),
-                    properties: bs.properties.unwrap_or_else(|| PropList::new()),
-                })
+                let name = intern_str(bs.name);
+                let rule = settings.asset_rules.get_rule(&name);
+                let mut properties = bs.properties.unwrap_or_else(|| PropList::new());
+                // Filter properties to only those relevant to rendering
+                rule.filter_properties(&mut properties);
+                block_palette.push((BlockState { name, properties }, rule));
             }
 
             // Record the block state index for each block; if there is no data, then the indexes are all
             // 0 by default, i.e. the first block palette entry (correct according to chunk format)
-            let mut block_info = [BlockInfo::new(); SECTION_BLOCK_COUNT];
+            let mut block_data = [BlockData::new(); SECTION_BLOCK_COUNT];
             if let Some(data) = section_nbt.block_states.data {
                 let palette_count = block_palette.len() as u64;
                 let bits = max(4, u64::BITS - (palette_count - 1).leading_zeros()) as usize;
@@ -559,9 +563,9 @@ impl RawChunk {
                         .take(packing)
                     })
                     .take(SECTION_BLOCK_COUNT)
-                    .zip(block_info.iter_mut())
-                    .for_each(|(v, info)| {
-                        info.set_state_index(v);
+                    .zip(block_data.iter_mut())
+                    .for_each(|(v, data)| {
+                        data.set_state_index(v);
                     });
             }
 
@@ -596,10 +600,10 @@ impl RawChunk {
                     .for_each(|(v, index)| {
                         *index = v;
                     });
-                block_info.iter_mut().enumerate().for_each(|(i, info)| {
+                block_data.iter_mut().enumerate().for_each(|(i, data)| {
                     let block_index = BIndex::from_flat_index(i);
                     let biome_index = block_index.to_biome_index();
-                    info.set_biome_index(indices[biome_index]);
+                    data.set_biome_index(indices[biome_index]);
                 });
             }
 
@@ -610,9 +614,9 @@ impl RawChunk {
                         let v = v as u8;
                         [v >> 4, v & 0xF]
                     })
-                    .zip(block_info.iter_mut())
-                    .for_each(|(v, block_info)| {
-                        block_info.set_lighting(block_info.lighting().with_block(v));
+                    .zip(block_data.iter_mut())
+                    .for_each(|(v, block_data)| {
+                        block_data.set_lighting(block_data.lighting().with_block(v));
                     });
             }
 
@@ -628,7 +632,7 @@ impl RawChunk {
                     )
                         .into(),
                 ),
-                block_info,
+                block_data,
                 block_palette,
                 biome_palette,
             };
@@ -660,9 +664,9 @@ impl RawChunk {
                     let v = v as u8;
                     [v >> 4, v & 0xF]
                 })
-                .zip(section.block_info.iter_mut())
-                .for_each(|(v, block_info)| {
-                    block_info.set_lighting(block_info.lighting().with_sky(v));
+                .zip(section.block_data.iter_mut())
+                .for_each(|(v, block_data)| {
+                    block_data.set_lighting(block_data.lighting().with_sky(v));
                 });
         }
 
@@ -678,10 +682,10 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef<'_>> {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockInfo<'_>> {
         self.sections.iter().enumerate().flat_map(|(i, section)| {
             let y_offset = i * CHUNK_SIZE as usize;
-            section.iter_blocks().map(move |block| BlockRef {
+            section.iter_blocks().map(move |block| BlockInfo {
                 index: block.index + BIndex((0, 0, y_offset as u32).into()),
                 ..block
             })
@@ -692,24 +696,26 @@ impl Chunk {
 #[derive(Debug)]
 pub struct Section {
     pub base: BCoords,
-    pub block_info: [BlockInfo; SECTION_BLOCK_COUNT],
-    pub block_palette: Vec<BlockState>,
+    pub block_data: [BlockData; SECTION_BLOCK_COUNT],
+    pub block_palette: Vec<(BlockState, Arc<AssetRule>)>,
     pub biome_palette: Vec<ArcStr>,
 }
 
 impl Section {
-    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockRef<'_>> {
-        self.block_info.iter().enumerate().map(|(i, &info)| {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = BlockInfo<'_>> {
+        self.block_data.iter().enumerate().map(|(i, &data)| {
             let x = i & 0xF;
             let z = (i >> 4) & 0xF;
             let y = (i >> 8) & 0xF;
             let index = BIndex((x as u32, z as u32, y as u32).into());
-            let state = &self.block_palette[info.state_index() as usize];
-            let biome = self.biome_palette[info.biome_index() as usize].as_str();
-            BlockRef {
+            let (state, rule) = &self.block_palette[data.state_index() as usize];
+            let biome = self.biome_palette[data.biome_index() as usize].clone();
+            BlockInfo {
                 index,
                 state,
                 biome,
+                lighting: data.lighting(),
+                render: rule.render.clone(),
             }
         })
     }
@@ -717,7 +723,6 @@ impl Section {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct BlockState {
-    // TODO: this should just be a well-known property instead?
     pub name: ArcStr,
     pub properties: PropList,
 }
@@ -727,6 +732,17 @@ impl BlockState {
         BlockState {
             name,
             properties: PropList::new(),
+        }
+    }
+
+    /// Get the name of the block without any namespace prefix, e.g. `water` instead of
+    /// `minecraft:water`.
+    pub fn short_name(&self) -> &str {
+        let name = self.name.as_str();
+        if let Some((_left, right)) = name.split_once(':') {
+            right
+        } else {
+            name
         }
     }
 
@@ -740,12 +756,26 @@ impl BlockState {
     }
 }
 
+impl std::fmt::Display for BlockState {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.name)?;
+        if !self.properties.is_empty() {
+            f.write_char('{')?;
+            self.properties.fmt(f)?;
+            f.write_char('}')?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct BlockRef<'a> {
+pub struct BlockInfo<'a> {
     // coords: BCoords,
     pub index: BIndex,
     pub state: &'a BlockState,
-    pub biome: &'a str,
+    pub biome: ArcStr,
+    pub lighting: LightLevel,
+    pub render: Arc<AssetRenderSpec>,
 }
 
 #[bitfield(u8)]
@@ -778,7 +808,7 @@ impl LightLevel {
 
 #[bitfield(u32)]
 #[derive(Clone, Copy)]
-pub struct BlockInfo {
+pub struct BlockData {
     state_index: u16,
     biome_index: u8,
     #[bits(8)]

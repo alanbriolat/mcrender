@@ -1,17 +1,19 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
+use arcstr::ArcStr;
 use image::imageops::overlay;
 use image::{GenericImageView, RgbaImage};
 use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
 
 use crate::canvas;
 use crate::canvas::{Image, ImageBuf, Pixel, Rgb, Rgba8};
-use crate::proplist::DefaultPropList as PropList;
 use crate::settings::{AssetRenderSpec, Settings};
-use crate::world::BlockRef;
+use crate::world::{BlockInfo, BlockState};
 
 /// The sides of a cube/block. The ordering defines the preferred render order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -24,78 +26,45 @@ pub enum Face {
     Top,
 }
 
-#[derive(
-    Clone, Eq, PartialEq, Hash, Ord, PartialOrd, derive_more::Deref, derive_more::DerefMut,
-)]
-pub struct AssetInfo(PropList);
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct AssetInfo<'s> {
+    pub state: Cow<'s, BlockState>,
+    pub biome: Option<ArcStr>,
+}
 
-const PROP_NAME: &str = "_asset";
-const PROP_BIOME: &str = "_biome";
-pub const DEFAULT_BIOME: &str = "minecraft:plains";
-
-impl AssetInfo {
-    pub fn new<V: AsRef<str>>(name: V) -> Self {
-        Self(PropList::with_capacity(2)).with_property(PROP_NAME, name)
-    }
-
-    pub fn with_property<K: AsRef<str>, V: AsRef<str>>(mut self, k: K, v: V) -> Self {
-        self.insert(k.as_ref(), v.as_ref());
-        self
-    }
-
-    pub fn with_properties<K: AsRef<str>, V: AsRef<str>>(
-        mut self,
-        iter: impl IntoIterator<Item = (K, V)>,
-    ) -> Self {
-        for (k, v) in iter.into_iter() {
-            self.insert(k.as_ref(), v.as_ref());
-        }
-        self
-    }
-
-    pub fn with_biome<V: AsRef<str>>(mut self, v: V) -> Self {
-        self.insert(PROP_BIOME, v.as_ref());
-        self
-    }
-
-    pub fn get_property<K: AsRef<str>>(&self, k: K) -> Option<&str> {
-        self.get(k.as_ref())
-    }
-
-    pub fn name(&self) -> &str {
-        self.get(PROP_NAME).unwrap()
-    }
-
-    pub fn short_name(&self) -> &str {
-        let name = self.name();
-        if let Some((_left, right)) = name.split_once(":") {
-            right
-        } else {
-            name
+impl<'s> AssetInfo<'s> {
+    pub fn into_owned(self) -> AssetInfo<'static> {
+        AssetInfo {
+            state: Cow::Owned(self.state.into_owned()),
+            biome: self.biome,
         }
     }
 
     pub fn biome(&self) -> &str {
-        self.get_property(PROP_BIOME).unwrap_or(DEFAULT_BIOME)
+        self.biome
+            .as_ref()
+            .map(|biome| biome.as_str())
+            .unwrap_or(DEFAULT_BIOME)
     }
 }
 
-impl std::fmt::Display for AssetInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.iter();
-        let (k, v) = iter.next().unwrap();
-        write!(f, "{k}={v}")?;
-        for (k, v) in iter {
-            write!(f, ";{k}={v}")?;
+impl<'s> std::fmt::Display for AssetInfo<'s> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.state.fmt(f)?;
+        if let Some(ref biome) = self.biome {
+            f.write_char('@')?;
+            biome.fmt(f)?;
         }
         Ok(())
     }
 }
 
+pub const DEFAULT_BIOME: &str = "minecraft:plains";
+
 pub struct AssetCache<'s> {
     path: PathBuf,
     textures: Mutex<HashMap<PathBuf, Arc<RgbaImage>>>,
-    assets: Mutex<HashMap<AssetInfo, Option<Arc<Sprite>>>>,
+    assets: Mutex<HashMap<AssetInfo<'static>, Option<Arc<Sprite>>>>,
     projection_east: Projection,
     projection_south: Projection,
     projection_top: Projection,
@@ -189,8 +158,19 @@ impl<'s> AssetCache<'s> {
         )
     }
 
-    pub fn get_asset(&self, block: &BlockRef) -> Option<Arc<Sprite>> {
-        let (rule, info) = self.settings.asset_rules.get(block);
+    pub fn get_asset(&self, block: &BlockInfo) -> Option<Arc<Sprite>> {
+        // Only include biome in the cache key if rendering is biome-dependent
+        let biome = if block.render.is_biome_aware() {
+            Some(block.biome.clone())
+        } else {
+            None
+        };
+
+        // Don't clone the block state unless absolutely necessary
+        let info = AssetInfo {
+            state: Cow::Borrowed(block.state),
+            biome,
+        };
 
         // TODO: RwLock instead?
         let mut assets = self.assets.lock().unwrap();
@@ -198,7 +178,10 @@ impl<'s> AssetCache<'s> {
             return cached.clone();
         }
 
-        match self.create_asset(&info, &rule.render) {
+        // Convert to owned, because we'll need to store it as the HashMap key
+        let info = info.into_owned();
+
+        match self.create_asset(&info, &*block.render) {
             Ok(Some(sprite)) => {
                 let sprite = Some(Arc::new(sprite));
                 assets.insert(info, sprite.clone());
@@ -229,7 +212,7 @@ impl<'s> AssetCache<'s> {
             Nothing => Ok(None),
 
             SolidUniform { texture } => {
-                let texture_name = texture.apply(info);
+                let texture_name = texture.apply(&info.state);
                 let texture = self.get_block_texture(texture_name)?;
                 let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
                 Ok(Some(output))
@@ -239,8 +222,8 @@ impl<'s> AssetCache<'s> {
                 top_texture,
                 side_texture,
             } => {
-                let top_texture = self.get_block_texture(top_texture.apply(info))?;
-                let side_texture = self.get_block_texture(side_texture.apply(info))?;
+                let top_texture = self.get_block_texture(top_texture.apply(&info.state))?;
+                let side_texture = self.get_block_texture(side_texture.apply(&info.state))?;
                 self.create_solid_block_top_side(info, &top_texture, &side_texture)
             }
 
@@ -248,9 +231,9 @@ impl<'s> AssetCache<'s> {
                 texture,
                 tint_color,
             } => {
-                let texture_name = texture.apply(info);
+                let texture_name = texture.apply(&info.state);
                 let mut texture = (*self.get_block_texture(texture_name)?).clone();
-                if let Some(actual_tint_color) = tint_color.apply(info, self.settings) {
+                if let Some(actual_tint_color) = tint_color.apply(info.biome(), self.settings) {
                     tint_in_place(&mut texture, actual_tint_color);
                 }
                 let output = self.render_solid_block(&texture, &texture, &texture, &TINT_BLOCK_3D);
@@ -261,11 +244,11 @@ impl<'s> AssetCache<'s> {
                 texture,
                 tint_color,
             } => {
-                let texture_name = texture.apply(info);
+                let texture_name = texture.apply(&info.state);
                 let mut texture = (*self.get_block_texture(texture_name)?).clone();
                 if let Some(actual_tint_color) = tint_color
                     .as_ref()
-                    .and_then(|tc| tc.apply(info, self.settings))
+                    .and_then(|tc| tc.apply(info.biome(), self.settings))
                 {
                     tint_in_place(&mut texture, actual_tint_color);
                 }
@@ -274,7 +257,7 @@ impl<'s> AssetCache<'s> {
             }
 
             Crop { texture } => {
-                let texture_name = texture.apply(info);
+                let texture_name = texture.apply(&info.state);
                 let texture = self.get_block_texture(texture_name)?;
                 let output = self.render_crop(&texture);
                 Ok(Some(output))
@@ -282,46 +265,46 @@ impl<'s> AssetCache<'s> {
 
             Grass { tint_color } => {
                 let actual_tint_color = tint_color
-                    .apply(info, self.settings)
+                    .apply(info.biome(), self.settings)
                     .unwrap_or(Rgb([255, 255, 255]));
                 self.create_grass_block(info, actual_tint_color)
             }
 
             Vine { tint_color } => {
-                let texture_name = info.short_name();
+                let texture_name = info.state.short_name();
                 let mut texture = (*self.get_block_texture(texture_name)?).clone();
                 if let Some(actual_tint_color) = tint_color
                     .as_ref()
-                    .and_then(|tc| tc.apply(info, self.settings))
+                    .and_then(|tc| tc.apply(info.biome(), self.settings))
                 {
                     tint_in_place(&mut texture, actual_tint_color);
                 }
-                let top_texture = if let Some("true") = info.get_property("up") {
+                let top_texture = if let Some("true") = info.state.get_property("up") {
                     Some(&texture)
                 } else {
                     None
                 };
-                let south_texture = if let Some("true") = info.get_property("south") {
+                let south_texture = if let Some("true") = info.state.get_property("south") {
                     Some(&texture)
                 } else {
                     None
                 };
-                let east_texture = if let Some("true") = info.get_property("east") {
+                let east_texture = if let Some("true") = info.state.get_property("east") {
                     Some(&texture)
                 } else {
                     None
                 };
-                let bottom_texture = if let Some("true") = info.get_property("down") {
+                let bottom_texture = if let Some("true") = info.state.get_property("down") {
                     Some(&texture)
                 } else {
                     None
                 };
-                let north_texture = if let Some("true") = info.get_property("north") {
+                let north_texture = if let Some("true") = info.state.get_property("north") {
                     Some(&texture)
                 } else {
                     None
                 };
-                let west_texture = if let Some("true") = info.get_property("west") {
+                let west_texture = if let Some("true") = info.state.get_property("west") {
                     Some(&texture)
                 } else {
                     None
@@ -340,7 +323,7 @@ impl<'s> AssetCache<'s> {
 
             Water { tint_color } => {
                 let actual_tint_color = tint_color
-                    .apply(info, self.settings)
+                    .apply(info.biome(), self.settings)
                     .unwrap_or(Rgb([255, 255, 255]));
                 self.create_water_block(info, actual_tint_color)
             } // _ => unreachable!(),
@@ -354,7 +337,7 @@ impl<'s> AssetCache<'s> {
         top_texture: &RgbaImage,
         side_texture: &RgbaImage,
     ) -> anyhow::Result<Option<Sprite>> {
-        let output = match info.get_property("axis") {
+        let output = match info.state.get_property("axis") {
             None | Some("y") => {
                 self.render_solid_block(&top_texture, &side_texture, &side_texture, &TINT_BLOCK_3D)
             }
@@ -406,7 +389,7 @@ impl<'s> AssetCache<'s> {
         // let mut texture = (*self.get_block_texture("water_still")?).clone();
         let mut texture = RgbaImage::from_pixel(16, 16, [255, 255, 255, 120].into());
         tint_in_place(&mut texture, tint_color);
-        let block_tints = if let Some("true") = info.get_property("falling") {
+        let block_tints = if let Some("true") = info.state.get_property("falling") {
             &TINT_BLOCK_3D
         } else {
             &TINT_BLOCK_NONE
@@ -595,24 +578,5 @@ impl TryFrom<RgbaImage> for Sprite {
                 ImageBuf::from_raw(SPRITE_SIZE, SPRITE_SIZE, buf).unwrap(),
             ))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_assetinfo() {
-        let info = AssetInfo::new("minecraft:birch_log").with_property("axis", "z");
-        assert_eq!(format!("{info}"), "_asset=minecraft:birch_log;axis=z");
-        let info = AssetInfo::new("minecraft:leaf_litter")
-            .with_property("segment_amount", "3")
-            .with_property("facing", "east")
-            .with_biome("badlands");
-        assert_eq!(
-            format!("{info}"),
-            "_asset=minecraft:leaf_litter;_biome=badlands;facing=east;segment_amount=3"
-        );
     }
 }

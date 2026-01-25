@@ -228,7 +228,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
                 let Some(raw_chunk) = self.dim_info.get_raw_chunk(CCoords(coords)).unwrap() else {
                     continue;
                 };
-                let Ok(chunk) = raw_chunk.parse() else {
+                let Ok(chunk) = raw_chunk.parse(self.renderer.settings) else {
                     log::error!("failed to parse chunk {coords}");
                     continue;
                 };
@@ -295,7 +295,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
             let image_offset = Self::REGION_ORIGIN
                 + CHUNK_OFFSET_X * raw_chunk.index.x() as isize
                 + CHUNK_OFFSET_Z * raw_chunk.index.z() as isize;
-            let chunk = raw_chunk.parse()?;
+            let chunk = raw_chunk.parse(self.renderer.settings)?;
             self.renderer
                 .render_chunk_at(&chunk, &mut output, image_offset.0, image_offset.1)?;
         }
@@ -313,7 +313,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
             .dim_info
             .get_raw_chunk(coords)?
             .ok_or(anyhow!("no such chunk"))?;
-        let chunk = raw_chunk.parse()?;
+        let chunk = raw_chunk.parse(self.renderer.settings)?;
         self.renderer.render_chunk_at(&chunk, &mut output, 0, 0)?;
         Ok(output)
     }

@@ -8,10 +8,10 @@ use config::builder::DefaultState;
 use config::{Config, ConfigBuilder, File, FileFormat};
 use serde::{Deserialize, Deserializer};
 
-use crate::asset::AssetInfo;
 use crate::canvas::Rgb;
+use crate::proplist::PropList;
 use crate::util::intern_str;
-use crate::world::BlockRef;
+use crate::world::BlockState;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -68,6 +68,21 @@ impl AssetRenderSpec {
             _ => false,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            AssetRenderSpec::Nothing => true,
+            _ => true,
+        }
+    }
+
+    pub fn is_solid(&self) -> bool {
+        match self {
+            AssetRenderSpec::SolidUniform { .. } => true,
+            AssetRenderSpec::SolidTopSide { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,15 +98,15 @@ pub enum AssetStringComponent {
 }
 
 impl AssetStringComponent {
-    pub fn apply<'a>(&'a self, info: &'a AssetInfo) -> &'a str {
+    pub fn apply<'a>(&'a self, block: &'a BlockState) -> &'a str {
         use AssetStringComponent::*;
 
         match self {
-            Name => info.short_name(),
+            Name => block.short_name(),
             Literal(literal) => literal.as_str(),
-            Property(name) => info.get(name).unwrap(),
+            Property(name) => block.get_property(name).unwrap(),
             PropertyMap { name, values } => {
-                if let Some(prop_value) = info.get(name) {
+                if let Some(prop_value) = block.get_property(name) {
                     if let Some(mapped_value) = values.get(prop_value) {
                         return mapped_value.as_str();
                     }
@@ -112,10 +127,10 @@ impl Default for AssetStringBuilder {
 }
 
 impl AssetStringBuilder {
-    pub fn apply(&self, info: &AssetInfo) -> String {
+    pub fn apply(&self, block: &BlockState) -> String {
         let mut result = String::new();
         for c in self.0.iter() {
-            result.push_str(c.apply(info));
+            result.push_str(c.apply(block));
         }
         result
     }
@@ -129,7 +144,11 @@ pub struct AssetRule {
     pub properties: BTreeSet<String>,
 }
 
-impl AssetRule {}
+impl AssetRule {
+    pub fn filter_properties<const N: usize>(&self, properties: &mut PropList<N>) {
+        properties.retain(|k, _v| self.properties.contains(k));
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -146,11 +165,10 @@ impl TintColor {
         }
     }
 
-    pub fn apply(&self, info: &AssetInfo, settings: &Settings) -> Option<Rgb<u8>> {
+    pub fn apply(&self, biome: &str, settings: &Settings) -> Option<Rgb<u8>> {
         match self {
             TintColor::Literal(literal) => Some(literal.clone()),
             TintColor::BiomeLookup(section) => {
-                let biome = info.biome();
                 if let Some(color_map) = settings.biome_colors.get(section) {
                     let biome_tint = color_map.get(biome);
                     log::debug!(
@@ -177,20 +195,8 @@ pub struct AssetRules {
 }
 
 impl AssetRules {
-    pub fn get(&self, block: &BlockRef) -> (Arc<AssetRule>, AssetInfo) {
-        let mut info = AssetInfo::new(block.state.name.as_str());
-        let rule = self.rules.get(info.name()).unwrap_or(&self.default);
-        info = info.with_properties(block.state.properties.iter().filter_map(|(k, v)| {
-            if self.default.properties.contains(k) || rule.properties.contains(k) {
-                Some((k, v))
-            } else {
-                None
-            }
-        }));
-        if rule.render.is_biome_aware() {
-            info = info.with_biome(block.biome);
-        }
-        (rule.clone(), info)
+    pub fn get_rule(&self, block_name: &ArcStr) -> Arc<AssetRule> {
+        self.rules.get(block_name).unwrap_or(&self.default).clone()
     }
 }
 
@@ -214,7 +220,10 @@ impl<'de> Deserialize<'de> for AssetRules {
         let mut rules = BTreeMap::new();
         for (rule_name, raw_rule) in raw.into_iter() {
             let names = raw_rule.names.unwrap_or_else(|| vec![rule_name]);
-            let rule = Arc::new(raw_rule.rule);
+            let mut rule = raw_rule.rule;
+            // Include default properties in the properties allowed by the rule
+            rule.properties.extend(default.properties.iter().cloned());
+            let rule = Arc::new(rule);
             for name in names.into_iter() {
                 let key = if name.contains(':') {
                     intern_str(&name)
