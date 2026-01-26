@@ -1,5 +1,6 @@
 pub mod avx2;
 mod buffer;
+mod multiply;
 mod overlay;
 mod pixel;
 pub mod scalar;
@@ -7,6 +8,7 @@ pub mod sse4;
 mod view;
 
 pub use buffer::ImageBuf;
+pub use multiply::Multiply;
 pub use overlay::{Overlay, overlay, overlay_at, overlay_final, overlay_final_at};
 pub use pixel::*;
 pub use view::ImageView;
@@ -93,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_buffer() {
-        let mut buf = ImageBuf::<Rgba<u8>, _>::from_pixel(2, 3, [10, 20, 30, 40].into());
+        let mut buf = ImageBuf::<Rgba<u8>, Vec<_>>::from_pixel(2, 3, [10, 20, 30, 40].into());
         assert_eq!(buf.channels()[1], 20);
         assert_eq!(buf.pixels()[1][1], 20);
         assert!(buf.get_pixel_mut(2, 2).is_none());
@@ -115,8 +117,8 @@ mod tests {
 
     #[test]
     fn test_overlay_buffer_rgb_rgb() {
-        let mut buf = ImageBuf::from_pixel(8, 6, Rgb::<u8>([127, 127, 127]));
-        let other = ImageBuf::from_pixel(2, 3, Rgb::<u8>([1, 1, 1]));
+        let mut buf = ImageBuf::<Rgb8, Vec<_>>::from_pixel(8, 6, Rgb::<u8>([127, 127, 127]));
+        let other = ImageBuf::<Rgb8, Vec<_>>::from_pixel(2, 3, Rgb::<u8>([1, 1, 1]));
         overlay(&mut buf, &other);
         for y in 0..buf.height() {
             for x in 0..buf.width() {
@@ -135,11 +137,11 @@ mod tests {
         let fg = Rgb::<u8>([1, 1, 1]);
         assert_ne!(bg, fg);
         // Create a buffer
-        let mut buf = ImageBuf::from_pixel(8, 6, bg);
+        let mut buf = ImageBuf::<Rgb8, Vec<_>>::from_pixel(8, 6, bg);
         // Create a mutable view into that buffer
         let mut view = buf.view_mut(1, 2, 7, 4);
         // Create an overlay image, and apply it to the view
-        let other = ImageBuf::from_pixel(2, 3, fg);
+        let other = ImageBuf::<Rgb8, Vec<_>>::from_pixel(2, 3, fg);
         overlay(&mut view, &other); // Rows above the view-adjusted overlay are unchanged
         for y in 0..2 {
             assert_eq!(

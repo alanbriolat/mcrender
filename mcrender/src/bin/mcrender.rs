@@ -170,7 +170,7 @@ fn main() -> Result<()> {
             let asset = asset_cache
                 .get_asset(&block_ref)
                 .ok_or(anyhow!("no such asset"))?;
-            let wrapped = ImageBuffer::from(&**asset);
+            let wrapped = ImageBuffer::from(&*asset);
             let mut image = image::imageops::resize(
                 &wrapped,
                 wrapped.width() * scale,

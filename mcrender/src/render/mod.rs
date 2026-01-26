@@ -1,3 +1,6 @@
+pub mod sprite;
+pub mod texture;
+
 use std::ops::RangeInclusive;
 
 use anyhow::anyhow;
@@ -125,7 +128,7 @@ impl<'s> Renderer<'s> {
                 continue;
             };
             // Render the sprite into the correct position
-            canvas::overlay_final_at(output, &**asset, start.0, start.1);
+            canvas::overlay_final_at(output, &*asset, start.0, start.1);
         }
         Ok(())
     }
@@ -280,7 +283,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
 
     #[tracing::instrument(level = "debug", skip_all, fields(coords = %coords))]
     pub fn render_region(&self, coords: RCoords) -> anyhow::Result<ImageBuf<Rgba8>> {
-        let mut output = ImageBuf::from_pixel(
+        let mut output = ImageBuf::<Rgba8, Vec<_>>::from_pixel(
             Self::REGION_RENDER_WIDTH,
             Self::REGION_RENDER_HEIGHT,
             self.renderer.settings.background_color.to_rgba(),
@@ -304,7 +307,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
 
     #[tracing::instrument(level = "debug", skip_all, fields(coords = %coords))]
     pub fn render_chunk(&self, coords: CCoords) -> anyhow::Result<ImageBuf<Rgba8>> {
-        let mut output = ImageBuf::from_pixel(
+        let mut output = ImageBuf::<Rgba8, Vec<_>>::from_pixel(
             CHUNK_RENDER_WIDTH,
             CHUNK_RENDER_HEIGHT,
             self.renderer.settings.background_color.to_rgba(),

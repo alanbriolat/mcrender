@@ -37,3 +37,8 @@ pub fn rgba8_onto_rgb8_overlay(dst_pixels: &mut [Rgb<u8>], src_pixels: &[Rgba<u8
     }
     dst_pixels.len()
 }
+
+#[inline(always)]
+pub fn u16_div_by_255(a: u16) -> u16 {
+    (a + ((a + 257) >> 8)) >> 8
+}

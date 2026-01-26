@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use crate::canvas::private::PrivateToken;
 use crate::canvas::{Image, ImageMut, Pixel, Rgb, Rgba, TransmutablePixel, private};
 
 pub struct ImageBuf<P: Pixel, Container = Vec<<P as Pixel>::Subpixel>> {
@@ -98,6 +99,27 @@ impl<P: Pixel> ImageBuf<P, Vec<P::Subpixel>> {
     }
 }
 
+impl<P, const N: usize> ImageBuf<P, [P::Subpixel; N]>
+where
+    P: TransmutablePixel + Copy,
+    P::Subpixel: Default,
+{
+    pub fn from_pixel(width: usize, height: usize, pixel: P) -> Self {
+        let count = width * height;
+        let len = count * P::CHANNELS;
+        assert_eq!(len, N);
+        let mut data = [P::Subpixel::default(); N];
+        P::slice_from_channels_mut(PrivateToken, &mut data).fill(pixel);
+        Self {
+            width,
+            height,
+            len,
+            data,
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<P, Container> Image for ImageBuf<P, Container>
 where
     P: TransmutablePixel,
@@ -157,6 +179,22 @@ where
 
     fn raw_pixels_mut(&mut self) -> &mut [Self::Pixel] {
         self.pixels_mut()
+    }
+}
+
+impl<P, Container> Clone for ImageBuf<P, Container>
+where
+    P: Pixel,
+    Container: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            len: self.len,
+            data: self.data.clone(),
+            _phantom: PhantomData,
+        }
     }
 }
 
