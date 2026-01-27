@@ -10,7 +10,7 @@ use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgba8};
 use crate::coords::{CoordsXZ, Vec2D};
 use crate::settings::Settings;
 use crate::world::{
-    CCoords, CHUNK_SIZE, Chunk, ChunkBounds, ChunkCache, DimensionInfo, RCoords,
+    BlockInfo, CCoords, CHUNK_SIZE, Chunk, ChunkBounds, ChunkCache, DimensionInfo, RCoords,
     REGION_SIZE, Section, WORLD_HEIGHT,
 };
 
@@ -129,7 +129,8 @@ impl<'s> Renderer<'s> {
             };
             // Render the sprite into the correct position
             // TODO: proper context
-            asset.render_at(output, start.0, start.1);
+            let context = BlockContext::new(block);
+            asset.render_at(output, start.0, start.1, &context);
         }
         Ok(())
     }
@@ -150,6 +151,64 @@ impl<'s> Renderer<'s> {
             let y_offset =
                 CHUNK_RENDER_HEIGHT - SECTION_RENDER_HEIGHT - (i * SECTION_RENDER_HEIGHT / 2);
             self.render_section_at(section, output, x, y + y_offset as isize)?;
+        }
+        Ok(())
+    }
+
+    fn render_section_context_at<'c, I>(
+        &self,
+        section_context: &SectionContext<'c>,
+        output: &mut I,
+        x: isize,
+        y: isize,
+    ) -> anyhow::Result<()>
+    where
+        I: ImageMut,
+        [I::Pixel]: Overlay<[Rgba8]>,
+    {
+        for block_context in section_context.iter_blocks() {
+            let block = &block_context.block;
+            // Calculate where the sprite for the block would render
+            let start = SECTION_ORIGIN
+                + BLOCK_OFFSET_X * block.index.x() as isize
+                + BLOCK_OFFSET_Z * block.index.z() as isize
+                + BLOCK_OFFSET_Y * block.index.y() as isize
+                + Vec2D(x, y);
+            let end = start + Vec2D(SPRITE_SIZE as isize, SPRITE_SIZE as isize);
+            // Skip the block if it would be entirely out-of-bounds
+            if end.0 <= 0
+                || end.1 <= 0
+                || start.0 >= output.width() as isize
+                || start.1 >= output.height() as isize
+            {
+                continue;
+            }
+            // Try to get a sprite to render for the block
+            let Some(asset) = self.asset_cache.get_asset(&block) else {
+                continue;
+            };
+            // Render the sprite into the correct position
+            asset.render_at(output, start.0, start.1, &block_context);
+        }
+        Ok(())
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(coords = %chunk_context.chunk.coords))]
+    fn render_chunk_context_at<'c, I>(
+        &self,
+        chunk_context: &ChunkContext<'c>,
+        output: &mut I,
+        x: isize,
+        y: isize,
+    ) -> anyhow::Result<()>
+    where
+        I: ImageMut,
+        [I::Pixel]: Overlay<[Rgba8]>,
+    {
+        for (i, section_context) in chunk_context.iter_sections().enumerate() {
+            let y_offset =
+                CHUNK_RENDER_HEIGHT - SECTION_RENDER_HEIGHT - (i * SECTION_RENDER_HEIGHT / 2);
+            self.render_section_context_at(&section_context, output, x, y + y_offset as isize)?;
         }
         Ok(())
     }
@@ -232,9 +291,22 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
                 let Some(chunk) = self.chunk_cache.get(coords) else {
                     continue;
                 };
-                self.renderer
-                    .render_chunk_at(&chunk, &mut buffer, image_offset.0, image_offset.1)
-                    .unwrap();
+                let south = self.chunk_cache.get(coords.south());
+                let east = self.chunk_cache.get(coords.east());
+                let chunk_context = ChunkContext {
+                    chunk: chunk.as_ref(),
+                    south: south.as_ref().map(|c| c.as_ref()),
+                    east: east.as_ref().map(|c| c.as_ref()),
+                };
+                self.renderer.render_chunk_context_at(
+                    &chunk_context,
+                    &mut buffer,
+                    image_offset.0,
+                    image_offset.1,
+                )?;
+                // self.renderer
+                //     .render_chunk_at(&chunk, &mut buffer, image_offset.0, image_offset.1)
+                //     .unwrap();
             }
 
             // TODO: optimise out tiles that don't show anything
@@ -291,8 +363,21 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
                 let Some(chunk) = self.chunk_cache.get(chunk_coords) else {
                     continue;
                 };
-                self.renderer
-                    .render_chunk_at(&chunk, &mut output, image_offset.0, image_offset.1)?;
+                let south = self.chunk_cache.get(chunk_coords.south());
+                let east = self.chunk_cache.get(chunk_coords.east());
+                let chunk_context = ChunkContext {
+                    chunk: chunk.as_ref(),
+                    south: south.as_ref().map(|c| c.as_ref()),
+                    east: east.as_ref().map(|c| c.as_ref()),
+                };
+                self.renderer.render_chunk_context_at(
+                    &chunk_context,
+                    &mut output,
+                    image_offset.0,
+                    image_offset.1,
+                )?;
+                // self.renderer
+                //     .render_chunk_at(&chunk, &mut output, image_offset.0, image_offset.1)?;
             }
         }
         Ok(output)
@@ -309,7 +394,104 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
             .chunk_cache
             .get(coords)
             .ok_or(anyhow!("no such chunk"))?;
-        self.renderer.render_chunk_at(&chunk, &mut output, 0, 0)?;
+        let south = self.chunk_cache.get(coords.south());
+        let east = self.chunk_cache.get(coords.east());
+        let chunk_context = ChunkContext {
+            chunk: chunk.as_ref(),
+            south: south.as_ref().map(|c| c.as_ref()),
+            east: east.as_ref().map(|c| c.as_ref()),
+        };
+        self.renderer
+            .render_chunk_context_at(&chunk_context, &mut output, 0, 0)?;
+        // self.renderer.render_chunk_at(&chunk, &mut output, 0, 0)?;
         Ok(output)
+    }
+}
+
+struct ChunkContext<'c> {
+    chunk: &'c Chunk,
+    south: Option<&'c Chunk>,
+    east: Option<&'c Chunk>,
+}
+
+impl<'c> ChunkContext<'c> {
+    fn iter_sections(&self) -> impl Iterator<Item = SectionContext<'c>> {
+        self.chunk.sections.iter().enumerate().map(|(i, section)| {
+            let south = self.south.map(|chunk| &chunk.sections[i]);
+            let east = self.east.map(|chunk| &chunk.sections[i]);
+            let up = if i + 1 < self.chunk.sections.len() {
+                Some(&self.chunk.sections[i + 1])
+            } else {
+                None
+            };
+            SectionContext {
+                section,
+                south,
+                east,
+                up,
+            }
+        })
+    }
+}
+
+struct SectionContext<'c> {
+    section: &'c Section,
+    south: Option<&'c Section>,
+    east: Option<&'c Section>,
+    up: Option<&'c Section>,
+}
+
+impl<'c> SectionContext<'c> {
+    fn iter_blocks(&self) -> impl Iterator<Item = BlockContext<'c>> {
+        self.section.iter_blocks().map(|block| {
+            let up_index = block.index.up();
+            let up = if up_index.y() < CHUNK_SIZE {
+                Some(self.section.get_block(up_index))
+            } else {
+                self.up.map(|section| {
+                    section.get_block((up_index.0 - (0, 0, CHUNK_SIZE).into()).into())
+                })
+            };
+            let south_index = block.index.south();
+            let south = if south_index.z() < CHUNK_SIZE {
+                Some(self.section.get_block(south_index))
+            } else {
+                self.south.map(|section| {
+                    section.get_block((south_index.0 - (0, CHUNK_SIZE, 0).into()).into())
+                })
+            };
+            let east_index = block.index.east();
+            let east = if east_index.x() < CHUNK_SIZE {
+                Some(self.section.get_block(east_index))
+            } else {
+                self.east.map(|section| {
+                    section.get_block((east_index.0 - (CHUNK_SIZE, 0, 0).into()).into())
+                })
+            };
+            BlockContext {
+                block,
+                south,
+                east,
+                up,
+            }
+        })
+    }
+}
+
+pub struct BlockContext<'c> {
+    pub block: BlockInfo<'c>,
+    pub south: Option<BlockInfo<'c>>,
+    pub east: Option<BlockInfo<'c>>,
+    pub up: Option<BlockInfo<'c>>,
+}
+
+impl<'c> BlockContext<'c> {
+    pub fn new(block: BlockInfo<'c>) -> Self {
+        Self {
+            block,
+            south: None,
+            east: None,
+            up: None,
+        }
     }
 }

@@ -16,7 +16,7 @@ use mcrender::asset::AssetCache;
 use mcrender::canvas::Rgb8;
 use mcrender::coords::CoordsXZ;
 use mcrender::render::sprite::new_sprite_buffer;
-use mcrender::render::{DimensionRenderer, Renderer};
+use mcrender::render::{BlockContext, DimensionRenderer, Renderer};
 use mcrender::settings::Settings;
 use mcrender::world::{
     BIndex, BlockInfo, CCoords, ChunkBounds, DimensionID, LightLevelBuilder, RCoords,
@@ -177,7 +177,8 @@ fn main() -> Result<()> {
             if let Some(background) = background {
                 buffer.pixels_mut().fill(background.to_rgba());
             }
-            asset.render_at(&mut buffer, 0, 0);
+            let context = BlockContext::new(block_ref);
+            asset.render_at(&mut buffer, 0, 0, &context);
             let wrapped = ImageBuffer::from(&buffer);
             let image = image::imageops::resize(
                 &wrapped,

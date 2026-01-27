@@ -108,6 +108,14 @@ impl RCoords {
 pub struct CCoords(pub CoordsXZ);
 
 impl CCoords {
+    pub fn south(self) -> Self {
+        Self((self.x(), self.z() + 1).into())
+    }
+
+    pub fn east(self) -> Self {
+        Self((self.x() + 1, self.z()).into())
+    }
+
     pub fn to_region_coords(self) -> (RCoords, CIndex) {
         (
             RCoords(
@@ -227,6 +235,21 @@ pub struct BCoords(pub CoordsXZY);
 pub struct BIndex(pub IndexXZY);
 
 impl BIndex {
+    #[inline(always)]
+    pub fn up(self) -> Self {
+        (self.0 + (0, 0, 1).into()).into()
+    }
+
+    #[inline(always)]
+    pub fn south(self) -> Self {
+        (self.0 + (0, 1, 0).into()).into()
+    }
+
+    #[inline(always)]
+    pub fn east(self) -> Self {
+        (self.0 + (1, 0, 0).into()).into()
+    }
+
     pub fn to_flat_index(self) -> usize {
         (self.y() * CHUNK_SIZE * CHUNK_SIZE + self.z() * CHUNK_SIZE + self.x()) as usize
     }
@@ -704,6 +727,19 @@ pub struct Section {
 }
 
 impl Section {
+    pub fn get_block(&self, index: BIndex) -> BlockInfo<'_> {
+        let data = self.block_data[index.to_flat_index()];
+        let (state, rule) = &self.block_palette[data.state_index() as usize];
+        let biome = self.biome_palette[data.biome_index() as usize].clone();
+        BlockInfo {
+            index,
+            state,
+            biome,
+            lighting: data.lighting(),
+            render: rule.render.clone(),
+        }
+    }
+
     pub fn iter_blocks(&self) -> impl Iterator<Item = BlockInfo<'_>> {
         self.block_data.iter().enumerate().map(|(i, &data)| {
             let x = i & 0xF;

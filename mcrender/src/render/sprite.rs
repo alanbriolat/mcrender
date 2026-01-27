@@ -7,6 +7,7 @@ use parking_lot::RwLock;
 
 use crate::canvas;
 use crate::canvas::{ImageBuf, ImageMut, Multiply, Overlay, Pixel, Rgb, Rgb8, Rgba8};
+use crate::render::BlockContext;
 use crate::render::texture::TextureCache;
 
 pub struct Sprite(pub Vec<SpriteLayer>);
@@ -31,13 +32,13 @@ impl Sprite {
         });
     }
 
-    pub fn render_at<'c, I>(&self, output: &mut I, x: isize, y: isize)
+    pub fn render_at<'c, I>(&self, output: &mut I, x: isize, y: isize, context: &BlockContext<'c>)
     where
         I: ImageMut,
         [I::Pixel]: Overlay<[Rgba8]>,
     {
         for layer in self.0.iter() {
-            layer.render_at(output, x, y);
+            layer.render_at(output, x, y, context);
         }
     }
 }
@@ -47,8 +48,13 @@ pub struct SpriteLayer {
     pub render_mode: RenderMode,
 }
 
+fn light_multiplier(light: u8) -> Rgb8 {
+    let v = light * 14 + 45;
+    Rgb([v, v, v])
+}
+
 impl SpriteLayer {
-    pub fn render_at<I>(&self, output: &mut I, x: isize, y: isize)
+    pub fn render_at<'c, I>(&self, output: &mut I, x: isize, y: isize, context: &BlockContext<'c>)
     where
         I: ImageMut,
         [I::Pixel]: Overlay<[Rgba8]>,
@@ -56,8 +62,97 @@ impl SpriteLayer {
         use RenderMode::*;
         // TODO: context-awareness, lighting, etc.
         match self.render_mode {
-            _ => {
+            Solid => {
                 canvas::overlay_final_at(output, &*self.buffer, x, y);
+            }
+            SolidTop => {
+                // if !context.up.as_ref().map(|info| info.render.is_solid()).unwrap_or(false) {
+                let mut buffer = (*self.buffer).clone();
+                let light = context
+                    .up
+                    .as_ref()
+                    .map(|b| b.lighting.effective())
+                    .unwrap_or(0xF);
+                let light_multiply = light_multiplier(light);
+                buffer.pixels_mut().multiply(&light_multiply);
+                canvas::overlay_final_at(output, &buffer, x, y);
+                // canvas::overlay_final_at(output, &*self.buffer, x, y);
+                // }
+            }
+            SolidEast => {
+                // if !context.east.as_ref().map(|info| info.render.is_solid()).unwrap_or(false) {
+                let mut buffer = (*self.buffer).clone();
+                let light = context
+                    .east
+                    .as_ref()
+                    .map(|b| b.lighting.effective())
+                    .unwrap_or(0xF);
+                let light_multiply = light_multiplier(light);
+                buffer.pixels_mut().multiply(&light_multiply);
+                canvas::overlay_final_at(output, &buffer, x, y);
+                // canvas::overlay_final_at(output, &*self.buffer, x, y);
+                // }
+            }
+            SolidSouth => {
+                // if !context.south.as_ref().map(|info| info.render.is_solid()).unwrap_or(false) {
+                let mut buffer = (*self.buffer).clone();
+                let light = context
+                    .south
+                    .as_ref()
+                    .map(|b| b.lighting.effective())
+                    .unwrap_or(0xF);
+                let light_multiply = light_multiplier(light);
+                buffer.pixels_mut().multiply(&light_multiply);
+                canvas::overlay_final_at(output, &buffer, x, y);
+                // canvas::overlay_final_at(output, &*self.buffer, x, y);
+                // }
+            }
+            Translucent => {
+                let mut buffer = (*self.buffer).clone();
+                let light = context.block.lighting.effective();
+                let light_multiply = light_multiplier(light);
+                buffer.pixels_mut().multiply(&light_multiply);
+                canvas::overlay_final_at(output, &buffer, x, y);
+                // canvas::overlay_final_at(output, &*self.buffer, x, y);
+            }
+            TranslucentTop => {
+                if let Some(block) = context.up.as_ref() {
+                    if block.state.name == context.block.state.name {
+                        return;
+                    }
+                }
+                let mut buffer = (*self.buffer).clone();
+                let light = context.block.lighting.effective();
+                let light_multiply = light_multiplier(light);
+                buffer.pixels_mut().multiply(&light_multiply);
+                canvas::overlay_final_at(output, &buffer, x, y);
+                // canvas::overlay_final_at(output, &*self.buffer, x, y);
+            }
+            TranslucentEast => {
+                if let Some(block) = context.east.as_ref() {
+                    if block.state.name == context.block.state.name {
+                        return;
+                    }
+                }
+                let mut buffer = (*self.buffer).clone();
+                let light = context.block.lighting.effective();
+                let light_multiply = light_multiplier(light);
+                buffer.pixels_mut().multiply(&light_multiply);
+                canvas::overlay_final_at(output, &buffer, x, y);
+                // canvas::overlay_final_at(output, &*self.buffer, x, y);
+            }
+            TranslucentSouth => {
+                if let Some(block) = context.south.as_ref() {
+                    if block.state.name == context.block.state.name {
+                        return;
+                    }
+                }
+                let mut buffer = (*self.buffer).clone();
+                let light = context.block.lighting.effective();
+                let light_multiply = light_multiplier(light);
+                buffer.pixels_mut().multiply(&light_multiply);
+                canvas::overlay_final_at(output, &buffer, x, y);
+                // canvas::overlay_final_at(output, &*self.buffer, x, y);
             }
         }
     }
