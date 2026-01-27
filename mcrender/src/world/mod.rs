@@ -614,7 +614,7 @@ impl RawChunk {
                 data.iter()
                     .flat_map(|v| {
                         let v = v as u8;
-                        [v >> 4, v & 0xF]
+                        [v & 0xF, v >> 4]
                     })
                     .zip(block_data.iter_mut())
                     .for_each(|(v, block_data)| {
@@ -664,7 +664,7 @@ impl RawChunk {
                 .copied()
                 .flat_map(|v| {
                     let v = v as u8;
-                    [v >> 4, v & 0xF]
+                    [v & 0xF, v >> 4]
                 })
                 .zip(section.block_data.iter_mut())
                 .for_each(|(v, block_data)| {
