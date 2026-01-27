@@ -24,6 +24,7 @@ rayon = "1.11.0"
 bitfields = "1.0.2"
 arcstr = "1.2.0"
 parking_lot = "0.12.5"
+lru = "0.16.3"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }

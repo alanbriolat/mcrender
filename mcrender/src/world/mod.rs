@@ -5,7 +5,9 @@ Anvil file format notes:
 - A chunk's blocks are ordered by (Y, Z, X).
  */
 
+mod cache;
 mod nbt;
+pub use cache::{ChunkBounds, ChunkCache};
 
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, HashMap};

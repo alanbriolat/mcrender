@@ -10,7 +10,8 @@ use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgba8};
 use crate::coords::{CoordsXZ, Vec2D};
 use crate::settings::Settings;
 use crate::world::{
-    CCoords, CHUNK_SIZE, Chunk, DimensionInfo, RCoords, REGION_SIZE, Section, WORLD_HEIGHT,
+    CCoords, CHUNK_SIZE, Chunk, ChunkBounds, ChunkCache, DimensionInfo, RCoords,
+    REGION_SIZE, Section, WORLD_HEIGHT,
 };
 
 /// Get the image width required to render an `x`-by-`z` area of blocks (regardless of how tall).
@@ -155,14 +156,14 @@ impl<'s> Renderer<'s> {
 }
 
 pub struct DimensionRenderer<'i, 's> {
-    dim_info: &'i DimensionInfo,
+    chunk_cache: ChunkCache<'i, 's>,
     renderer: Renderer<'s>,
     col_range: RangeInclusive<i32>,
     row_range: RangeInclusive<i32>,
 }
 
 impl<'i, 's> DimensionRenderer<'i, 's> {
-    pub fn new(dim_info: &'i DimensionInfo, renderer: Renderer<'s>) -> Self {
+    pub fn new(dim_info: &'i DimensionInfo, renderer: Renderer<'s>, bounds: ChunkBounds) -> Self {
         let min_chunk = dim_info.min_region_coords().to_chunk_coords();
         let max_chunk = dim_info.max_region_coords().to_chunk_coords();
         let min_row = (min_chunk.x() + min_chunk.z()) / 4;
@@ -172,7 +173,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
         let max_col = (max_chunk.x() - min_chunk.z()) / 2;
 
         Self {
-            dim_info,
+            chunk_cache: ChunkCache::new(dim_info, renderer.settings, bounds, 100),
             renderer,
             col_range: min_col..=max_col,
             row_range: min_row..=max_row,
@@ -209,7 +210,7 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
     ];
 
     #[tracing::instrument(level = "debug", skip_all, fields(col = %col))]
-    pub fn render_map_column<F>(&self, col: i32, f: F) -> anyhow::Result<()>
+    pub fn render_map_column<F>(&mut self, col: i32, f: F) -> anyhow::Result<()>
     where
         F: Fn(Vec2D<i32>, &ImageBuf<Rgba8, &[u8]>) -> bool,
     {
@@ -227,17 +228,10 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
             for offset in Self::TILE_RENDER_CHUNK_OFFSETS.iter().copied() {
                 let image_offset =
                     CHUNK_OFFSET_X * offset.x() as isize + CHUNK_OFFSET_Z * offset.z() as isize;
-                let coords = anchor + offset;
-                let Some(raw_chunk) = self.dim_info.get_raw_chunk(CCoords(coords)).unwrap() else {
+                let coords = CCoords(anchor + offset);
+                let Some(chunk) = self.chunk_cache.get(coords) else {
                     continue;
                 };
-                let Ok(chunk) = raw_chunk.parse(self.renderer.settings) else {
-                    log::error!("failed to parse chunk {coords}");
-                    continue;
-                };
-                if !chunk.fully_generated {
-                    continue;
-                }
                 self.renderer
                     .render_chunk_at(&chunk, &mut buffer, image_offset.0, image_offset.1)
                     .unwrap();
@@ -282,41 +276,39 @@ impl<'i, 's> DimensionRenderer<'i, 's> {
     );
 
     #[tracing::instrument(level = "debug", skip_all, fields(coords = %coords))]
-    pub fn render_region(&self, coords: RCoords) -> anyhow::Result<ImageBuf<Rgba8>> {
+    pub fn render_region(&mut self, coords: RCoords) -> anyhow::Result<ImageBuf<Rgba8>> {
         let mut output = ImageBuf::<Rgba8, Vec<_>>::from_pixel(
             Self::REGION_RENDER_WIDTH,
             Self::REGION_RENDER_HEIGHT,
             self.renderer.settings.background_color.to_rgba(),
         );
-        let region_info = self
-            .dim_info
-            .get_region(coords)
-            .ok_or(anyhow!("no such region"))?;
-        let region = region_info.open()?;
-        for raw_chunk in region.into_iter() {
-            let raw_chunk = raw_chunk?;
-            let image_offset = Self::REGION_ORIGIN
-                + CHUNK_OFFSET_X * raw_chunk.index.x() as isize
-                + CHUNK_OFFSET_Z * raw_chunk.index.z() as isize;
-            let chunk = raw_chunk.parse(self.renderer.settings)?;
-            self.renderer
-                .render_chunk_at(&chunk, &mut output, image_offset.0, image_offset.1)?;
+        let base = coords.to_chunk_coords();
+        for z in 0..(REGION_SIZE as i32) {
+            for x in 0..(REGION_SIZE as i32) {
+                let image_offset =
+                    Self::REGION_ORIGIN + CHUNK_OFFSET_X * x as isize + CHUNK_OFFSET_Z * z as isize;
+                let chunk_coords = base + CCoords((x, z).into());
+                let Some(chunk) = self.chunk_cache.get(chunk_coords) else {
+                    continue;
+                };
+                self.renderer
+                    .render_chunk_at(&chunk, &mut output, image_offset.0, image_offset.1)?;
+            }
         }
         Ok(output)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(coords = %coords))]
-    pub fn render_chunk(&self, coords: CCoords) -> anyhow::Result<ImageBuf<Rgba8>> {
+    pub fn render_chunk(&mut self, coords: CCoords) -> anyhow::Result<ImageBuf<Rgba8>> {
         let mut output = ImageBuf::<Rgba8, Vec<_>>::from_pixel(
             CHUNK_RENDER_WIDTH,
             CHUNK_RENDER_HEIGHT,
             self.renderer.settings.background_color.to_rgba(),
         );
-        let raw_chunk = self
-            .dim_info
-            .get_raw_chunk(coords)?
+        let chunk = self
+            .chunk_cache
+            .get(coords)
             .ok_or(anyhow!("no such chunk"))?;
-        let chunk = raw_chunk.parse(self.renderer.settings)?;
         self.renderer.render_chunk_at(&chunk, &mut output, 0, 0)?;
         Ok(output)
     }

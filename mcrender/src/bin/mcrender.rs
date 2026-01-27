@@ -18,7 +18,9 @@ use mcrender::coords::CoordsXZ;
 use mcrender::render::sprite::new_sprite_buffer;
 use mcrender::render::{DimensionRenderer, Renderer};
 use mcrender::settings::Settings;
-use mcrender::world::{BIndex, BlockInfo, CCoords, DimensionID, LightLevelBuilder, RCoords};
+use mcrender::world::{
+    BIndex, BlockInfo, CCoords, ChunkBounds, DimensionID, LightLevelBuilder, RCoords,
+};
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
@@ -199,8 +201,9 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let dim_renderer = DimensionRenderer::new(dim_info, renderer);
             let coords = RCoords(*coords);
+            let mut dim_renderer =
+                DimensionRenderer::new(dim_info, renderer, ChunkBounds::single_region(coords));
             let image = dim_renderer.render_region(coords)?;
             log::info!("writing output to {:?}", target);
             let output_image = ImageBuffer::from(&image);
@@ -219,8 +222,9 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let dim_renderer = DimensionRenderer::new(dim_info, renderer);
             let coords = CCoords(*coords);
+            let mut dim_renderer =
+                DimensionRenderer::new(dim_info, renderer, ChunkBounds::single_chunk(coords));
             let image = dim_renderer.render_chunk(coords)?;
             log::info!("writing output to {:?}", target);
             let output_image = ImageBuffer::from(&image);
@@ -240,7 +244,7 @@ fn main() -> Result<()> {
             let dim_info = world_info
                 .get_dimension(&DimensionID::Overworld)
                 .ok_or(anyhow!("no such dimension"))?;
-            let dim_renderer = DimensionRenderer::new(dim_info, renderer);
+            let dim_renderer = DimensionRenderer::new(dim_info, renderer, Default::default());
             // TODO: make blank-tile.png using background color
             let col_range = match column {
                 Some(col) => *col..=*col,
@@ -250,7 +254,8 @@ fn main() -> Result<()> {
                 // TODO: share a renderer but using RwLock (instead of Mutex) and less lock holding
                 //      during asset generation so there's less contention in AssetCache
                 let renderer = Renderer::new(&settings).unwrap();
-                let dim_renderer = DimensionRenderer::new(dim_info, renderer);
+                let mut dim_renderer =
+                    DimensionRenderer::new(dim_info, renderer, Default::default());
                 dim_renderer
                     .render_map_column(col, |coords, image| {
                         let tile_target = target_dir.join(format!("{}/{}.png", coords.0, coords.1));
