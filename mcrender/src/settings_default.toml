@@ -141,7 +141,12 @@ render.type = "solid_top_side"
 render.top_texture = [ "name", {literal = "_top"} ]
 render.side_texture = [ "name" ]
 
-[asset_rules.podzol]
+[asset_rules.top_side_no_axis]
+names = [
+    "podzol",
+    "melon",
+    "pumpkin",
+]
 render.type = "solid_top_side"
 render.top_texture = [ "name", {literal = "_top"} ]
 render.side_texture = [ "name", {literal = "_side"} ]
