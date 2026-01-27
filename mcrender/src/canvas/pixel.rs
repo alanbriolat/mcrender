@@ -70,7 +70,7 @@ pub unsafe trait TransmutablePixel: Pixel {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, derive_more::From, derive_more::Into)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, derive_more::From, derive_more::Into)]
 #[repr(transparent)]
 pub struct Rgb<T: Subpixel>(pub [T; 3]);
 
@@ -149,7 +149,7 @@ impl From<Rgb<u8>> for u32 {
 unsafe impl TransmutablePixel for Rgb<u8> {}
 unsafe impl TransmutablePixel for Rgb<f32> {}
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, derive_more::From, derive_more::Into)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, derive_more::From, derive_more::Into)]
 #[repr(transparent)]
 pub struct Rgba<T: Subpixel>(pub [T; 4]);
 

@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use arcstr::ArcStr;
 
 use crate::canvas;
-use crate::canvas::{Image, Multiply, Rgb};
+use crate::canvas::Image;
 use crate::render::sprite::{Aspect, PartialSpriteCache, SpriteBuffer, new_sprite_buffer};
 use crate::render::texture::TextureCache;
 use crate::settings::{AssetRenderSpec, Settings};
@@ -125,21 +125,15 @@ impl<'s> AssetCache<'s> {
         match &renderer {
             Nothing => Ok(None),
 
+            // Render a solid block with the specified texutre on all 3 faces.
             SolidUniform { texture } => {
                 let texture_name = texture.apply(&info.state);
                 let mut output = new_sprite_buffer();
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&texture_name, Aspect::BlockEast)?,
-                );
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&texture_name, Aspect::BlockSouth)?,
-                );
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&texture_name, Aspect::BlockTop)?,
-                );
+                const PARTIALS: [Aspect; 3] =
+                    [Aspect::BlockEast, Aspect::BlockSouth, Aspect::BlockTop];
+                for aspect in PARTIALS {
+                    canvas::overlay(&mut output, &*self.partials.get(&texture_name, aspect)?);
+                }
                 Ok(Some(output))
             }
 
@@ -157,26 +151,35 @@ impl<'s> AssetCache<'s> {
                 tint_color,
             } => {
                 let texture_name = texture.apply(&info.state);
-                let mut output =
-                    self.render_solid_block(&texture_name, &texture_name, &texture_name)?;
-                if let Some(actual_tint_color) = tint_color.apply(info.biome(), self.settings) {
-                    output.pixels_mut().multiply(&actual_tint_color);
+                let tint = tint_color.apply(info.biome(), self.settings);
+                let mut output = new_sprite_buffer();
+                const PARTIALS: [Aspect; 3] =
+                    [Aspect::BlockEast, Aspect::BlockSouth, Aspect::BlockTop];
+                for aspect in PARTIALS {
+                    canvas::overlay(
+                        &mut output,
+                        &*self.partials.get_tinted(&texture_name, aspect, tint)?,
+                    );
                 }
                 Ok(Some(output))
             }
 
+            // Render a simple plant, where in-game a single-texture is rendered in an X in the
+            // bottom-center of the block.
             Plant {
                 texture,
                 tint_color,
             } => {
                 let texture_name = texture.apply(&info.state);
-                let mut output = self.render_plant(&texture_name)?;
-                if let Some(actual_tint_color) = tint_color
+                let tint = tint_color
                     .as_ref()
-                    .and_then(|tc| tc.apply(info.biome(), self.settings))
-                {
-                    output.pixels_mut().multiply(&actual_tint_color);
-                }
+                    .map(|tc| tc.apply(info.biome(), self.settings))
+                    .flatten();
+                let output =
+                    (*self
+                        .partials
+                        .get_tinted(&texture_name, Aspect::PlantBottom, tint)?)
+                    .clone();
                 Ok(Some(output))
             }
 
@@ -187,68 +190,78 @@ impl<'s> AssetCache<'s> {
             }
 
             Grass { tint_color } => {
-                let actual_tint_color = tint_color
-                    .apply(info.biome(), self.settings)
-                    .unwrap_or(Rgb([255, 255, 255]));
-                self.create_grass_block(info, actual_tint_color)
+                let tint = tint_color.apply(info.biome(), self.settings);
+                let mut output = new_sprite_buffer();
+                canvas::overlay(&mut output, &*self.partials.get("dirt", Aspect::BlockEast)?);
+                canvas::overlay(
+                    &mut output,
+                    &*self.partials.get_tinted(
+                        "grass_block_side_overlay",
+                        Aspect::BlockEast,
+                        tint,
+                    )?,
+                );
+                canvas::overlay(
+                    &mut output,
+                    &*self.partials.get("dirt", Aspect::BlockSouth)?,
+                );
+                canvas::overlay(
+                    &mut output,
+                    &*self.partials.get_tinted(
+                        "grass_block_side_overlay",
+                        Aspect::BlockSouth,
+                        tint,
+                    )?,
+                );
+                canvas::overlay(
+                    &mut output,
+                    &*self
+                        .partials
+                        .get_tinted("grass_block_top", Aspect::BlockTop, tint)?,
+                );
+                Ok(Some(output))
             }
 
             Vine { tint_color } => {
                 let texture_name = info.state.short_name();
-                let top_texture = if let Some("true") = info.state.get_property("up") {
-                    Some(texture_name)
-                } else {
-                    None
-                };
-                let south_texture = if let Some("true") = info.state.get_property("south") {
-                    Some(texture_name)
-                } else {
-                    None
-                };
-                let east_texture = if let Some("true") = info.state.get_property("east") {
-                    Some(texture_name)
-                } else {
-                    None
-                };
-                let bottom_texture = if let Some("true") = info.state.get_property("down") {
-                    Some(texture_name)
-                } else {
-                    None
-                };
-                let north_texture = if let Some("true") = info.state.get_property("north") {
-                    Some(texture_name)
-                } else {
-                    None
-                };
-                let west_texture = if let Some("true") = info.state.get_property("west") {
-                    Some(texture_name)
-                } else {
-                    None
-                };
-                let mut output = self.render_transparent_block(
-                    top_texture,
-                    south_texture,
-                    east_texture,
-                    bottom_texture,
-                    north_texture,
-                    west_texture,
-                )?;
-                if let Some(actual_tint_color) = tint_color
+                let tint = tint_color
                     .as_ref()
-                    .and_then(|tc| tc.apply(info.biome(), self.settings))
-                {
-                    output.pixels_mut().multiply(&actual_tint_color);
+                    .map(|tc| tc.apply(info.biome(), self.settings))
+                    .flatten();
+                let mut output = new_sprite_buffer();
+                const PARTIALS: [(&str, Aspect); 6] = [
+                    ("down", Aspect::BlockBottom),
+                    ("north", Aspect::BlockNorth),
+                    ("west", Aspect::BlockWest),
+                    ("east", Aspect::BlockEast),
+                    ("south", Aspect::BlockSouth),
+                    ("up", Aspect::BlockTop),
+                ];
+                for (direction, aspect) in PARTIALS {
+                    if let Some("true") = info.state.get_property(direction) {
+                        canvas::overlay(
+                            &mut output,
+                            &*self.partials.get_tinted(texture_name, aspect, tint)?,
+                        );
+                    }
                 }
                 Ok(Some(output))
             }
 
             Water { tint_color } => {
-                let actual_tint_color = tint_color
-                    .apply(info.biome(), self.settings)
-                    .unwrap_or(Rgb([255, 255, 255]));
-                let mut output =
-                    self.render_solid_block("water_still", "water_flow", "water_flow")?;
-                output.pixels_mut().multiply(&actual_tint_color);
+                let tint = tint_color.apply(info.biome(), self.settings);
+                let mut output = new_sprite_buffer();
+                const PARTIALS: [(&str, Aspect); 3] = [
+                    ("water_flow", Aspect::BlockEast),
+                    ("water_flow", Aspect::BlockSouth),
+                    ("water_still", Aspect::BlockTop),
+                ];
+                for (texture_name, aspect) in PARTIALS {
+                    canvas::overlay(
+                        &mut output,
+                        &*self.partials.get_tinted(texture_name, aspect, tint)?,
+                    );
+                }
                 Ok(Some(output))
             }
         }
@@ -319,36 +332,6 @@ impl<'s> AssetCache<'s> {
         Ok(Some(output))
     }
 
-    fn create_grass_block(
-        &self,
-        _info: &AssetInfo,
-        biome_tint: Rgb<u8>,
-    ) -> anyhow::Result<Option<SpriteBuffer>> {
-        let mut biome_overlay = (*self.partials.get("grass_block_top", Aspect::BlockTop)?).clone();
-        canvas::overlay(
-            &mut biome_overlay,
-            &*self
-                .partials
-                .get("grass_block_side_overlay", Aspect::BlockSouth)?,
-        );
-        canvas::overlay(
-            &mut biome_overlay,
-            &*self
-                .partials
-                .get("grass_block_side_overlay", Aspect::BlockEast)?,
-        );
-        biome_overlay.pixels_mut().multiply(&biome_tint);
-        let mut output = new_sprite_buffer();
-        canvas::overlay(&mut output, &*self.partials.get("dirt", Aspect::BlockEast)?);
-        canvas::overlay(
-            &mut output,
-            &*self.partials.get("dirt", Aspect::BlockSouth)?,
-        );
-        canvas::overlay(&mut output, &*self.partials.get("dirt", Aspect::BlockTop)?);
-        canvas::overlay(&mut output, &biome_overlay);
-        Ok(Some(output))
-    }
-
     /// Render a solid block with the 3 specified face textures.
     fn render_solid_block(
         &self,
@@ -371,58 +354,6 @@ impl<'s> AssetCache<'s> {
             &*self.partials.get(top_texture, Aspect::BlockTop)?,
         );
         Ok(output)
-    }
-
-    fn render_transparent_block(
-        &self,
-        top_texture: Option<&str>,
-        south_texture: Option<&str>,
-        east_texture: Option<&str>,
-        bottom_texture: Option<&str>,
-        north_texture: Option<&str>,
-        west_texture: Option<&str>,
-    ) -> anyhow::Result<SpriteBuffer> {
-        let mut output = new_sprite_buffer();
-        if let Some(texture) = bottom_texture {
-            canvas::overlay(
-                &mut output,
-                &*self.partials.get(texture, Aspect::BlockBottom)?,
-            );
-        }
-        if let Some(texture) = north_texture {
-            canvas::overlay(
-                &mut output,
-                &*self.partials.get(texture, Aspect::BlockNorth)?,
-            );
-        }
-        if let Some(texture) = west_texture {
-            canvas::overlay(
-                &mut output,
-                &*self.partials.get(texture, Aspect::BlockWest)?,
-            );
-        }
-        if let Some(texture) = east_texture {
-            canvas::overlay(
-                &mut output,
-                &*self.partials.get(texture, Aspect::BlockEast)?,
-            );
-        }
-        if let Some(texture) = south_texture {
-            canvas::overlay(
-                &mut output,
-                &*self.partials.get(texture, Aspect::BlockSouth)?,
-            );
-        }
-        if let Some(texture) = top_texture {
-            canvas::overlay(&mut output, &*self.partials.get(texture, Aspect::BlockTop)?);
-        }
-        Ok(output)
-    }
-
-    /// Render a simple plant, where in-game a single-texture is rendered in an X in the
-    /// bottom-center of the block.
-    fn render_plant(&self, texture: &str) -> anyhow::Result<SpriteBuffer> {
-        Ok((*self.partials.get(texture, Aspect::PlantBottom)?).clone())
     }
 
     /// Render a slightly more complex plant, where in-game a single texture is rendered in a #

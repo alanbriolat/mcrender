@@ -200,7 +200,7 @@ fn get_aspect_projection(aspect: Aspect) -> &'static AspectProjection {
 
 pub struct PartialSpriteCache {
     textures: TextureCache,
-    cache: RwLock<HashMap<(Cow<'static, str>, Aspect), Arc<SpriteBuffer>>>,
+    cache: RwLock<HashMap<(Cow<'static, str>, Aspect, Option<Rgb8>), Arc<SpriteBuffer>>>,
 }
 
 impl PartialSpriteCache {
@@ -212,24 +212,36 @@ impl PartialSpriteCache {
     }
 
     pub fn get(&self, name: &str, aspect: Aspect) -> anyhow::Result<Arc<SpriteBuffer>> {
+        self.get_tinted(name, aspect, None)
+    }
+
+    pub fn get_tinted(
+        &self,
+        name: &str,
+        aspect: Aspect,
+        tint: Option<Rgb8>,
+    ) -> anyhow::Result<Arc<SpriteBuffer>> {
         // Try to get the buffer with just a read lock
-        if let Some(image) = self.cache.read().get(&(Cow::Borrowed(name), aspect)) {
+        if let Some(image) = self.cache.read().get(&(Cow::Borrowed(name), aspect, tint)) {
             return Ok(image.clone());
         }
 
         // Generate the buffer, not holding the lock while we do so
         let texture = self.textures.get(name)?;
-        let buffer = self.render_aspect(&*texture, aspect);
+        let mut buffer = self.render_aspect(&*texture, aspect);
+        if let Some(tint_color) = tint {
+            buffer.pixels_mut().multiply(&tint_color);
+        }
 
         // Get the write lock
         let mut cache = self.cache.write();
-        if let Some(image) = cache.get(&(Cow::Borrowed(name), aspect)) {
+        if let Some(image) = cache.get(&(Cow::Borrowed(name), aspect, tint)) {
             // If something else populated the cache in the meantime, reuse that entry
             Ok(image.clone())
         } else {
             // Otherwise store the new cache entry
             let buffer = Arc::new(buffer);
-            cache.insert((Cow::Owned(name.to_owned()), aspect), buffer.clone());
+            cache.insert((Cow::Owned(name.to_owned()), aspect, tint), buffer.clone());
             Ok(buffer)
         }
     }
