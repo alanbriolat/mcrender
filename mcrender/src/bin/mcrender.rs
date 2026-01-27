@@ -6,8 +6,8 @@ use std::str::FromStr;
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use config::FileFormat;
+use image::ImageBuffer;
 use image::imageops::FilterType;
-use image::{ImageBuffer, Rgba, RgbaImage};
 use rayon::prelude::*;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -15,6 +15,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use mcrender::asset::AssetCache;
 use mcrender::canvas::Rgb8;
 use mcrender::coords::CoordsXZ;
+use mcrender::render::sprite::new_sprite_buffer;
 use mcrender::render::{DimensionRenderer, Renderer};
 use mcrender::settings::Settings;
 use mcrender::world::{BIndex, BlockInfo, CCoords, DimensionID, LightLevelBuilder, RCoords};
@@ -170,20 +171,18 @@ fn main() -> Result<()> {
             let asset = asset_cache
                 .get_asset(&block_ref)
                 .ok_or(anyhow!("no such asset"))?;
-            let wrapped = ImageBuffer::from(&*asset);
-            let mut image = image::imageops::resize(
+            let mut buffer = new_sprite_buffer();
+            if let Some(background) = background {
+                buffer.pixels_mut().fill(background.to_rgba());
+            }
+            asset.render_at(&mut buffer, 0, 0);
+            let wrapped = ImageBuffer::from(&buffer);
+            let image = image::imageops::resize(
                 &wrapped,
                 wrapped.width() * scale,
                 wrapped.height() * scale,
                 FilterType::Nearest,
             );
-            if let Some(background) = background {
-                let background_rgba = Rgba([background[0], background[1], background[2], 255]);
-                let mut new_image =
-                    RgbaImage::from_pixel(image.width(), image.height(), background_rgba);
-                image::imageops::overlay(&mut new_image, &image, 0, 0);
-                image = new_image;
-            }
             log::info!("writing asset to {:?}", target);
             let mut output_file = File::create(target)?;
             image.write_to(&mut output_file, image::ImageFormat::Png)?;

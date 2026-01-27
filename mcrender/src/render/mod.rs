@@ -6,7 +6,6 @@ use std::ops::RangeInclusive;
 use anyhow::anyhow;
 
 use crate::asset::{AssetCache, SPRITE_SIZE};
-use crate::canvas;
 use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgba8};
 use crate::coords::{CoordsXZ, Vec2D};
 use crate::settings::Settings;
@@ -128,7 +127,8 @@ impl<'s> Renderer<'s> {
                 continue;
             };
             // Render the sprite into the correct position
-            canvas::overlay_final_at(output, &*asset, start.0, start.1);
+            // TODO: proper context
+            asset.render_at(output, start.0, start.1);
         }
         Ok(())
     }

@@ -1,11 +1,79 @@
-use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
-use parking_lot::RwLock;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use crate::canvas::{ImageBuf, Multiply, Pixel, Rgb, Rgb8, Rgba8};
+use imageproc::geometric_transformations::{Interpolation, Projection, warp_into};
+use parking_lot::RwLock;
+
+use crate::canvas;
+use crate::canvas::{ImageBuf, ImageMut, Multiply, Overlay, Pixel, Rgb, Rgb8, Rgba8};
 use crate::render::texture::TextureCache;
+
+pub struct Sprite(pub Vec<SpriteLayer>);
+
+impl Sprite {
+    pub fn new() -> Sprite {
+        Sprite(Vec::new())
+    }
+
+    pub fn with_capacity(capacity: usize) -> Sprite {
+        Sprite(Vec::with_capacity(capacity))
+    }
+
+    pub fn add_new_layer<B: Into<Arc<SpriteBuffer>>>(
+        &mut self,
+        buffer: B,
+        render_mode: RenderMode,
+    ) {
+        self.0.push(SpriteLayer {
+            buffer: buffer.into(),
+            render_mode,
+        });
+    }
+
+    pub fn render_at<'c, I>(&self, output: &mut I, x: isize, y: isize)
+    where
+        I: ImageMut,
+        [I::Pixel]: Overlay<[Rgba8]>,
+    {
+        for layer in self.0.iter() {
+            layer.render_at(output, x, y);
+        }
+    }
+}
+
+pub struct SpriteLayer {
+    pub buffer: Arc<SpriteBuffer>,
+    pub render_mode: RenderMode,
+}
+
+impl SpriteLayer {
+    pub fn render_at<I>(&self, output: &mut I, x: isize, y: isize)
+    where
+        I: ImageMut,
+        [I::Pixel]: Overlay<[Rgba8]>,
+    {
+        use RenderMode::*;
+        // TODO: context-awareness, lighting, etc.
+        match self.render_mode {
+            _ => {
+                canvas::overlay_final_at(output, &*self.buffer, x, y);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderMode {
+    Solid,
+    SolidTop,
+    SolidEast,
+    SolidSouth,
+    Translucent,
+    TranslucentTop,
+    TranslucentEast,
+    TranslucentSouth,
+}
 
 pub const SPRITE_SIZE: usize = 24;
 const SPRITE_BUF_SIZE: usize = SPRITE_SIZE * SPRITE_SIZE * <Rgba8 as Pixel>::CHANNELS;

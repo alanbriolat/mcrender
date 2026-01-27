@@ -8,7 +8,9 @@ use arcstr::ArcStr;
 
 use crate::canvas;
 use crate::canvas::Image;
-use crate::render::sprite::{Aspect, PartialSpriteCache, SpriteBuffer, new_sprite_buffer};
+use crate::render::sprite::{
+    Aspect, PartialSpriteCache, RenderMode, Sprite, SpriteBuffer, new_sprite_buffer,
+};
 use crate::render::texture::TextureCache;
 use crate::settings::{AssetRenderSpec, Settings};
 use crate::world::{BlockInfo, BlockState};
@@ -50,7 +52,7 @@ pub const DEFAULT_BIOME: &str = "minecraft:plains";
 
 pub struct AssetCache<'s> {
     partials: PartialSpriteCache,
-    assets: Mutex<HashMap<AssetInfo<'static>, Option<Arc<SpriteBuffer>>>>,
+    assets: Mutex<HashMap<AssetInfo<'static>, Option<Arc<Sprite>>>>,
     settings: &'s Settings,
 }
 
@@ -72,7 +74,7 @@ impl<'s> AssetCache<'s> {
         })
     }
 
-    pub fn get_asset(&self, block: &BlockInfo) -> Option<Arc<SpriteBuffer>> {
+    pub fn get_asset(&self, block: &BlockInfo) -> Option<Arc<Sprite>> {
         // Only include biome in the cache key if rendering is biome-dependent
         let biome = if block.render.is_biome_aware() {
             Some(block.biome.clone())
@@ -118,7 +120,7 @@ impl<'s> AssetCache<'s> {
         &self,
         info: &AssetInfo,
         renderer: &AssetRenderSpec,
-    ) -> anyhow::Result<Option<SpriteBuffer>> {
+    ) -> anyhow::Result<Option<Sprite>> {
         use AssetRenderSpec::*;
 
         log::debug!("creating asset");
@@ -128,13 +130,16 @@ impl<'s> AssetCache<'s> {
             // Render a solid block with the specified texutre on all 3 faces.
             SolidUniform { texture } => {
                 let texture_name = texture.apply(&info.state);
-                let mut output = new_sprite_buffer();
-                const PARTIALS: [Aspect; 3] =
-                    [Aspect::BlockEast, Aspect::BlockSouth, Aspect::BlockTop];
-                for aspect in PARTIALS {
-                    canvas::overlay(&mut output, &*self.partials.get(&texture_name, aspect)?);
+                const PARTIALS: [(Aspect, RenderMode); 3] = [
+                    (Aspect::BlockEast, RenderMode::SolidEast),
+                    (Aspect::BlockSouth, RenderMode::SolidSouth),
+                    (Aspect::BlockTop, RenderMode::SolidTop),
+                ];
+                let mut sprite = Sprite::with_capacity(PARTIALS.len());
+                for (aspect, render_mode) in PARTIALS {
+                    sprite.add_new_layer(self.partials.get(&texture_name, aspect)?, render_mode);
                 }
-                Ok(Some(output))
+                Ok(Some(sprite))
             }
 
             SolidTopSide {
@@ -161,7 +166,10 @@ impl<'s> AssetCache<'s> {
                         &*self.partials.get_tinted(&texture_name, aspect, tint)?,
                     );
                 }
-                Ok(Some(output))
+                let mut sprite = Sprite::with_capacity(1);
+                // TODO: separate layer per face instead?
+                sprite.add_new_layer(output, RenderMode::Translucent);
+                Ok(Some(sprite))
             }
 
             // Render a simple plant, where in-game a single-texture is rendered in an X in the
@@ -180,46 +188,52 @@ impl<'s> AssetCache<'s> {
                         .partials
                         .get_tinted(&texture_name, Aspect::PlantBottom, tint)?)
                     .clone();
-                Ok(Some(output))
+                let mut sprite = Sprite::with_capacity(1);
+                sprite.add_new_layer(output, RenderMode::Translucent);
+                Ok(Some(sprite))
             }
 
             Crop { texture } => {
                 let texture_name = texture.apply(&info.state);
                 let output = self.render_crop(&texture_name)?;
-                Ok(Some(output))
+                let mut sprite = Sprite::with_capacity(1);
+                sprite.add_new_layer(output, RenderMode::Translucent);
+                Ok(Some(sprite))
             }
 
             Grass { tint_color } => {
                 let tint = tint_color.apply(info.biome(), self.settings);
-                let mut output = new_sprite_buffer();
-                canvas::overlay(&mut output, &*self.partials.get("dirt", Aspect::BlockEast)?);
+                let mut sprite = Sprite::with_capacity(3);
+
+                let mut east = (*self.partials.get("dirt", Aspect::BlockEast)?).clone();
                 canvas::overlay(
-                    &mut output,
+                    &mut east,
                     &*self.partials.get_tinted(
                         "grass_block_side_overlay",
                         Aspect::BlockEast,
                         tint,
                     )?,
                 );
+                sprite.add_new_layer(east, RenderMode::SolidEast);
+
+                let mut south = (*self.partials.get("dirt", Aspect::BlockSouth)?).clone();
                 canvas::overlay(
-                    &mut output,
-                    &*self.partials.get("dirt", Aspect::BlockSouth)?,
-                );
-                canvas::overlay(
-                    &mut output,
+                    &mut south,
                     &*self.partials.get_tinted(
                         "grass_block_side_overlay",
                         Aspect::BlockSouth,
                         tint,
                     )?,
                 );
-                canvas::overlay(
-                    &mut output,
-                    &*self
-                        .partials
+                sprite.add_new_layer(south, RenderMode::SolidSouth);
+
+                sprite.add_new_layer(
+                    self.partials
                         .get_tinted("grass_block_top", Aspect::BlockTop, tint)?,
+                    RenderMode::SolidTop,
                 );
-                Ok(Some(output))
+
+                Ok(Some(sprite))
             }
 
             Vine { tint_color } => {
@@ -245,24 +259,30 @@ impl<'s> AssetCache<'s> {
                         );
                     }
                 }
-                Ok(Some(output))
+                let mut sprite = Sprite::with_capacity(1);
+                sprite.add_new_layer(output, RenderMode::Translucent);
+                Ok(Some(sprite))
             }
 
             Water { tint_color } => {
                 let tint = tint_color.apply(info.biome(), self.settings);
-                let mut output = new_sprite_buffer();
-                const PARTIALS: [(&str, Aspect); 3] = [
-                    ("water_flow", Aspect::BlockEast),
-                    ("water_flow", Aspect::BlockSouth),
-                    ("water_still", Aspect::BlockTop),
+                const PARTIALS: [(&str, Aspect, RenderMode); 3] = [
+                    ("water_flow", Aspect::BlockEast, RenderMode::TranslucentEast),
+                    (
+                        "water_flow",
+                        Aspect::BlockSouth,
+                        RenderMode::TranslucentSouth,
+                    ),
+                    ("water_still", Aspect::BlockTop, RenderMode::TranslucentTop),
                 ];
-                for (texture_name, aspect) in PARTIALS {
-                    canvas::overlay(
-                        &mut output,
-                        &*self.partials.get_tinted(texture_name, aspect, tint)?,
+                let mut sprite = Sprite::with_capacity(PARTIALS.len());
+                for (texture_name, aspect, render_mode) in PARTIALS {
+                    sprite.add_new_layer(
+                        self.partials.get_tinted(texture_name, aspect, tint)?,
+                        render_mode,
                     );
                 }
-                Ok(Some(output))
+                Ok(Some(sprite))
             }
         }
     }
@@ -273,87 +293,56 @@ impl<'s> AssetCache<'s> {
         info: &AssetInfo,
         top_texture: &str,
         side_texture: &str,
-    ) -> anyhow::Result<Option<SpriteBuffer>> {
-        let output = match info.state.get_property("axis") {
+    ) -> anyhow::Result<Option<Sprite>> {
+        let mut sprite = Sprite::with_capacity(3);
+        match info.state.get_property("axis") {
             None | Some("y") => {
-                let mut output = new_sprite_buffer();
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&side_texture, Aspect::BlockEast)?,
+                sprite.add_new_layer(
+                    self.partials.get(side_texture, Aspect::BlockEast)?,
+                    RenderMode::SolidEast,
                 );
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&side_texture, Aspect::BlockSouth)?,
+                sprite.add_new_layer(
+                    self.partials.get(side_texture, Aspect::BlockSouth)?,
+                    RenderMode::SolidSouth,
                 );
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&top_texture, Aspect::BlockTop)?,
+                sprite.add_new_layer(
+                    self.partials.get(top_texture, Aspect::BlockTop)?,
+                    RenderMode::SolidTop,
                 );
-                output
             }
             Some("x") => {
-                let mut output = new_sprite_buffer();
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&top_texture, Aspect::BlockEast)?,
+                sprite.add_new_layer(
+                    self.partials.get(top_texture, Aspect::BlockEast)?,
+                    RenderMode::SolidEast,
                 );
-                canvas::overlay(
-                    &mut output,
-                    &*self
-                        .partials
-                        .get(&side_texture, Aspect::BlockSouthRotated)?,
+                sprite.add_new_layer(
+                    self.partials.get(side_texture, Aspect::BlockSouthRotated)?,
+                    RenderMode::SolidSouth,
                 );
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&side_texture, Aspect::BlockTopRotated)?,
+                sprite.add_new_layer(
+                    self.partials.get(side_texture, Aspect::BlockTopRotated)?,
+                    RenderMode::SolidTop,
                 );
-                output
             }
             Some("z") => {
-                let mut output = new_sprite_buffer();
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&side_texture, Aspect::BlockEastRotated)?,
+                sprite.add_new_layer(
+                    self.partials.get(side_texture, Aspect::BlockEastRotated)?,
+                    RenderMode::SolidEast,
                 );
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&top_texture, Aspect::BlockSouth)?,
+                sprite.add_new_layer(
+                    self.partials.get(top_texture, Aspect::BlockSouth)?,
+                    RenderMode::SolidSouth,
                 );
-                canvas::overlay(
-                    &mut output,
-                    &*self.partials.get(&side_texture, Aspect::BlockTop)?,
+                sprite.add_new_layer(
+                    self.partials.get(side_texture, Aspect::BlockTop)?,
+                    RenderMode::SolidTop,
                 );
-                output
             }
             Some(axis) => {
                 return Err(anyhow!("unsupported axis value: {}", axis));
             }
         };
-        Ok(Some(output))
-    }
-
-    /// Render a solid block with the 3 specified face textures.
-    fn render_solid_block(
-        &self,
-        top_texture: &str,
-        south_texture: &str,
-        east_texture: &str,
-    ) -> anyhow::Result<SpriteBuffer> {
-        // TODO: unify this with "render_transparent_block()"
-        let mut output = new_sprite_buffer();
-        canvas::overlay(
-            &mut output,
-            &*self.partials.get(east_texture, Aspect::BlockEast)?,
-        );
-        canvas::overlay(
-            &mut output,
-            &*self.partials.get(south_texture, Aspect::BlockSouth)?,
-        );
-        canvas::overlay(
-            &mut output,
-            &*self.partials.get(top_texture, Aspect::BlockTop)?,
-        );
-        Ok(output)
+        Ok(Some(sprite))
     }
 
     /// Render a slightly more complex plant, where in-game a single texture is rendered in a #
