@@ -131,9 +131,9 @@ fn init_aspect_projections() -> HashMap<Aspect, AspectProjection> {
             projection: flatten_projection([
                 Projection::translate(-8., -8.),
                 Projection::rotate(45f32.to_radians()),
-                Projection::scale(1.17, 1.17),
+                Projection::scale(1.13, 1.1),
                 Projection::scale(1.0, 0.5),
-                Projection::translate(11.5, 5.5),
+                Projection::translate(11.5, 5.8),
             ]),
             interpolation: Interpolation::Bilinear,
             tint: None,
@@ -207,9 +207,9 @@ fn init_aspect_projections() -> HashMap<Aspect, AspectProjection> {
             projection: flatten_projection([
                 Projection::translate(-8., -8.),
                 Projection::rotate(135f32.to_radians()),
-                Projection::scale(1.20, 1.14),
+                Projection::scale(1.13, 1.13),
                 Projection::scale(1.0, 0.5),
-                Projection::translate(10.6, 5.3),
+                Projection::translate(10.7, 5.3),
             ]),
             interpolation: Interpolation::Bilinear,
             tint: None,
