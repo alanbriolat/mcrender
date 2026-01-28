@@ -151,6 +151,10 @@ render.type = "solid_top_side"
 render.top_texture = [ "name", {literal = "_top"} ]
 render.side_texture = [ "name", {literal = "_side"} ]
 
+[asset_rules.magma_block]
+render.type = "solid_uniform"
+render.texture = [ {literal = "magma"} ]
+
 [asset_rules.biome_aware_leaves]
 names = ["acacia_leaves", "dark_oak_leaves", "jungle_leaves", "mangrove_leaves", "oak_leaves"]
 render.type = "leaves"
