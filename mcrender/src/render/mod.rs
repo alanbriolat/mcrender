@@ -6,7 +6,7 @@ use std::ops::RangeInclusive;
 use anyhow::anyhow;
 
 use crate::asset::{AssetCache, SPRITE_SIZE};
-use crate::canvas::{ImageBuf, ImageMut, Overlay, Pixel, Rgba8};
+use crate::canvas::{ImageBuf, ImageMut, MultiplyOverlay, Pixel, Rgb8, Rgba8};
 use crate::coords::{CoordsXZ, Vec2D};
 use crate::settings::Settings;
 use crate::world::{
@@ -105,7 +105,7 @@ impl<'s> Renderer<'s> {
     ) -> anyhow::Result<()>
     where
         I: ImageMut,
-        [I::Pixel]: Overlay<[Rgba8]>,
+        [I::Pixel]: MultiplyOverlay<Rgb8, [Rgba8]>,
     {
         for block in section.iter_blocks() {
             // Calculate where the sprite for the block would render
@@ -145,7 +145,7 @@ impl<'s> Renderer<'s> {
     ) -> anyhow::Result<()>
     where
         I: ImageMut,
-        [I::Pixel]: Overlay<[Rgba8]>,
+        [I::Pixel]: MultiplyOverlay<Rgb8, [Rgba8]>,
     {
         for (i, section) in chunk.sections.iter().enumerate() {
             let y_offset =
@@ -164,7 +164,7 @@ impl<'s> Renderer<'s> {
     ) -> anyhow::Result<()>
     where
         I: ImageMut,
-        [I::Pixel]: Overlay<[Rgba8]>,
+        [I::Pixel]: MultiplyOverlay<Rgb8, [Rgba8]>,
     {
         for block_context in section_context.iter_blocks() {
             let block = &block_context.block;
@@ -203,7 +203,7 @@ impl<'s> Renderer<'s> {
     ) -> anyhow::Result<()>
     where
         I: ImageMut,
-        [I::Pixel]: Overlay<[Rgba8]>,
+        [I::Pixel]: MultiplyOverlay<Rgb8, [Rgba8]>,
     {
         for (i, section_context) in chunk_context.iter_sections().enumerate() {
             let y_offset =

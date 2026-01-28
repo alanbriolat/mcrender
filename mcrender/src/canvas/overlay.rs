@@ -108,7 +108,7 @@ impl Overlay<Rgba<u8>> for Rgb<u8> {
     /// Overlay RGBA onto RGB: use fast integer blending with opaque background.
     #[inline]
     fn overlay(&mut self, src: &Rgba<u8>) {
-        (self[0], self[1], self[2]) = blend_final_pixel_u8(
+        (self[0], self[1], self[2]) = scalar::blend_final_pixel_u8(
             (self[0], self[1], self[2]),
             (src[0], src[1], src[2]),
             src[3],
@@ -139,7 +139,7 @@ impl Overlay<Rgba<u8>> for Rgba<u8> {
     /// Overlay RGBA onto RGBA, ignoring destination alpha: use fast integer blending
     #[inline]
     fn overlay_final(&mut self, src: &Rgba<u8>) {
-        (self[0], self[1], self[2]) = blend_final_pixel_u8(
+        (self[0], self[1], self[2]) = scalar::blend_final_pixel_u8(
             (self[0], self[1], self[2]),
             (src[0], src[1], src[2]),
             src[3],
@@ -319,39 +319,4 @@ where
     let mut dst_view = dst.view_mut(dst_left, dst_top, usize::MAX, usize::MAX);
     let src_view = src.view(src_left, src_top, usize::MAX, usize::MAX);
     overlay_final(&mut dst_view, &src_view);
-}
-
-#[inline]
-fn blend_final_pixel_u8(
-    (bg_r, bg_g, bg_b): (u8, u8, u8),
-    (fg_r, fg_g, fg_b): (u8, u8, u8),
-    fg_a: u8,
-) -> (u8, u8, u8) {
-    // Zero alpha = keep original pixel
-    if fg_a == 0 {
-        return (bg_r, bg_g, bg_b);
-    }
-    // Max alpha = overwrite with new pixel
-    if fg_a == 255 {
-        return (fg_r, fg_g, fg_b);
-    }
-    // Otherwise, actually blend, using only integers
-
-    // Upcast to u16
-    let (bg_r, bg_g, bg_b) = (bg_r as u16, bg_g as u16, bg_b as u16);
-    let (fg_r, fg_g, fg_b, fg_a) = (fg_r as u16, fg_g as u16, fg_b as u16, fg_a as u16);
-    // src_rgb * src_a
-    let (fg_r, fg_g, fg_b) = (fg_r * fg_a, fg_g * fg_a, fg_b * fg_a);
-    // dst_rgb * (255 - src_a)
-    let fg_a_inv = 255 - fg_a;
-    let (bg_r, bg_g, bg_b) = (bg_r * fg_a_inv, bg_g * fg_a_inv, bg_b * fg_a_inv);
-    // out_rgb * 255 = src_rgb * src_a + dst_rgb * (255 - src_a)
-    let (r, g, b) = (fg_r + bg_r, fg_g + bg_g, fg_b + bg_b);
-    // Divide by final alpha using fast integer divide-by-255 trick
-    let (r, g, b) = (
-        (r + ((r + 257) >> 8)) >> 8,
-        (g + ((g + 257) >> 8)) >> 8,
-        (b + ((b + 257) >> 8)) >> 8,
-    );
-    (r as u8, g as u8, b as u8)
 }

@@ -71,6 +71,94 @@ pub fn rgba8_overlay_final(dst_pixels: &mut [Rgba<u8>], src_pixels: &[Rgba<u8>])
     count
 }
 
+/// Multiply RGBA by RGB and overlay onto RGBA, ignoring destination alpha channel.
+///
+/// Assumes `src_pixels` is at least as long as `dst_pixels`. AVX2-accelerated implementation
+/// processes a multiple of 8 pixels, returning the number of pixels processed. Caller should
+/// process remaining pixels using [`crate::canvas::scalar::rgba8_multiply_overlay_final()`].
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+#[inline]
+pub fn rgba8_multiply_overlay_final(dst_pixels: &mut [Rgba<u8>], multiply: &Rgb<u8>, src_pixels: &[Rgba<u8>]) -> usize {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    fn u16x16_rgba_multiply_overlay_final(dst: __m256i, src: __m256i, multiply: __m256i, alpha: __m256i) -> __m256i {
+        // src_rgb = src_rgb * multiply
+        let src = u16x16_div_by_255(_mm256_mullo_epi16(src, multiply));
+        // src_rgb * src_a
+        let src = _mm256_mullo_epi16(src, alpha);
+        // dst_rgb * (255 - src_a)
+        let dst = _mm256_mullo_epi16(dst, _mm256_subs_epu16(_mm256_set1_epi16(255), alpha));
+        // (out * 255) = (src_rgb * src_a) + (dst_rgb * (255 - src_a))
+        let out = _mm256_adds_epu16(src, dst);
+        // "Un-premultiply" the color channels by dividing by 255
+        u16x16_div_by_255(out)
+    }
+
+    #[rustfmt::skip]
+    let alpha_shuffle = _mm256_set_epi8(
+        15, 15, 15, 15,
+        11, 11, 11, 11,
+        7, 7, 7, 7,
+        3, 3, 3, 3,
+        15, 15, 15, 15,
+        11, 11, 11, 11,
+        7, 7, 7, 7,
+        3, 3, 3, 3,
+    );
+    let alpha_mask = _mm256_set1_epi32(0xFF000000u32 as i32);
+    let zero = _mm256_setzero_si256();
+    let multiply = multiply.to_rgba();
+    let multiply = unsafe { _mm_loadu_si32(multiply.as_ptr().cast()) };
+    let multiply = _mm_shuffle_epi32::<0b00000000>(multiply);
+    let multiply = _mm_unpacklo_epi8(multiply, _mm_setzero_si128());
+    let multiply = _mm256_broadcastsi128_si256(multiply);
+
+    const CHUNK_LEN: usize = 8;
+    let mut count = 0;
+    // Process in chunks of 8 pixels (8 pixels * 4 channels of u8 = 32 bytes = 256 bits)
+    for (dst_chunk, src_chunk) in dst_pixels
+        .chunks_mut(CHUNK_LEN)
+        .zip(src_pixels.chunks(CHUNK_LEN))
+    {
+        if dst_chunk.len() < CHUNK_LEN {
+            break;
+        }
+        count += CHUNK_LEN;
+        // Read chunk of both buffers
+        let dst = unsafe { _mm256_loadu_si256(dst_chunk.as_ptr().cast()) };
+        let src = unsafe { _mm256_loadu_si256(src_chunk.as_ptr().cast()) };
+        // Duplicate src_a to all channels
+        let src_a = _mm256_shuffle_epi8(src, alpha_shuffle);
+        // Process low and high halves upcast from u8 to u16
+        let out_lo = u16x16_rgba_multiply_overlay_final(
+            _mm256_unpacklo_epi8(dst, zero),
+            _mm256_unpacklo_epi8(src, zero),
+            multiply,
+            _mm256_unpacklo_epi8(src_a, zero),
+        );
+        let out_hi = u16x16_rgba_multiply_overlay_final(
+            _mm256_unpackhi_epi8(dst, zero),
+            _mm256_unpackhi_epi8(src, zero),
+            multiply,
+            _mm256_unpackhi_epi8(src_a, zero),
+        );
+        // Recombine and results into a single vector
+        let out = _mm256_packus_epi16(out_lo, out_hi);
+        // Restore dst_a value
+        let out = _mm256_or_si256(
+            _mm256_and_si256(alpha_mask, dst),
+            _mm256_andnot_si256(alpha_mask, out),
+        );
+        unsafe {
+            _mm256_storeu_si256(dst_chunk.as_mut_ptr().cast(), out);
+        }
+    }
+
+    count
+}
+
 /// Overlay RGBA onto RGB.
 ///
 /// Assumes `src_pixels` is at least as long as `dst_pixels`. AVX2-accelerated implementation

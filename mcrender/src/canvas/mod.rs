@@ -8,7 +8,7 @@ pub mod sse4;
 mod view;
 
 pub use buffer::ImageBuf;
-pub use multiply::Multiply;
+pub use multiply::{Multiply, MultiplyOverlay, multiply_overlay_final, multiply_overlay_final_at};
 pub use overlay::{Overlay, overlay, overlay_at, overlay_final, overlay_final_at};
 pub use pixel::*;
 pub use view::ImageView;
